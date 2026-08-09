@@ -1,0 +1,347 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 每个 main 提交都对应一个独立版本；排队而不是取消，避免连续合入时漏发版本。
+concurrency:
+  group: flux-reader-release-main
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+  NPM_CONFIG_REPLACE_REGISTRY_HOST: always
+
+jobs:
+  metadata:
+    name: Validate release metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      fpk_asset: ${{ steps.version.outputs.fpk_asset }}
+      dmg_asset: ${{ steps.version.outputs.dmg_asset }}
+      release_state: ${{ steps.release.outputs.release_state }}
+
+    steps:
+      - name: Reject non-main manual runs
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
+        run: |
+          echo "Release 只能从 main 分支运行。" >&2
+          exit 1
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Validate synchronized version
+        id: version
+        run: node scripts/sync-version.js --check --github-output
+
+      - name: Inspect existing tag and release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          FPK_ASSET: ${{ steps.version.outputs.fpk_asset }}
+          DMG_ASSET: ${{ steps.version.outputs.dmg_asset }}
+          RELEASE_MARKER: "<!-- flux-reader-release-workflow -->"
+        run: |
+          set -euo pipefail
+
+          tag_exists=false
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            tag_exists=true
+            tag_sha="$(git rev-list -n 1 "refs/tags/$TAG")"
+            if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "$TAG 已指向 $tag_sha，当前提交为 $GITHUB_SHA。请提升 VERSION 后再合入。" >&2
+              exit 1
+            fi
+          fi
+
+          release_state="new"
+          if release_json="$(gh release view "$TAG" --json isDraft,assets,body,targetCommitish 2>/dev/null)"; then
+            if [[ "$(jq -r '.isDraft' <<<"$release_json")" == "true" ]]; then
+              target="$(jq -r '.targetCommitish // ""' <<<"$release_json")"
+              body="$(jq -r '.body // ""' <<<"$release_json")"
+              # gh release create may report the default branch as targetCommitish when
+              # the tag already exists. In that case the immutable tag is the authority.
+              if [[ "$body" != *"$RELEASE_MARKER"* \
+                || ( "$tag_exists" != "true" && "$target" != "$GITHUB_SHA" ) ]]; then
+                echo "$TAG 存在非本工作流创建的草稿 Release，拒绝自动接管。" >&2
+                exit 1
+              fi
+              release_state="draft"
+            else
+              if [[ "$tag_exists" != "true" ]]; then
+                echo "$TAG 已发布但本地未找到对应 tag，拒绝继续。" >&2
+                exit 1
+              fi
+              for asset in "$FPK_ASSET" "$DMG_ASSET" SHA256SUMS; do
+                if ! jq -e --arg name "$asset" '.assets[] | select(.name == $name)' <<<"$release_json" >/dev/null; then
+                  echo "$TAG 已发布但缺少资产 $asset；为避免覆盖公开资产，需人工处理。" >&2
+                  exit 1
+                fi
+              done
+              release_state="complete"
+            fi
+          elif [[ "$tag_exists" == "true" ]]; then
+            release_state="tag-only"
+          fi
+
+          echo "release_state=$release_state" >> "$GITHUB_OUTPUT"
+          echo "Release state: $release_state"
+
+  build-fpk:
+    name: Build fnOS FPK
+    needs: metadata
+    if: ${{ needs.metadata.outputs.release_state != 'complete' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/fnos/backend/package-lock.json
+            packages/reader-web/package-lock.json
+
+      - name: Install locked dependencies
+        run: |
+          npm ci --prefix apps/fnos/backend --no-audit --no-fund
+          npm ci --prefix packages/reader-web --no-audit --no-fund
+
+      - name: Validate version and run tests
+        run: |
+          npm run version:check
+          npm test
+
+      - name: Install verified fnpack 1.2.3
+        env:
+          FNPACK_URL: https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          FNPACK_SHA256: 54b97fa7b70968c4d05c79840f5daeff508957d0bb2062fdb0376d00d9615c93
+        run: |
+          curl --fail --location --silent --show-error "$FNPACK_URL" --output "$RUNNER_TEMP/fnpack"
+          echo "$FNPACK_SHA256  $RUNNER_TEMP/fnpack" | sha256sum --check --strict
+          chmod 0755 "$RUNNER_TEMP/fnpack"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Build FPK
+        env:
+          FPK_ASSET: ${{ needs.metadata.outputs.fpk_asset }}
+        run: |
+          set -euo pipefail
+          npm run pack:fnos
+
+          mapfile -t packages < <(find apps/fnos/package -maxdepth 1 -type f -name '*.fpk' -print)
+          if [[ "${#packages[@]}" -ne 1 ]]; then
+            echo "期望 fnpack 生成一个 FPK，实际为 ${#packages[@]} 个。" >&2
+            exit 1
+          fi
+
+          mkdir -p dist/release
+          mv -- "${packages[0]}" "dist/release/$FPK_ASSET"
+          test -s "dist/release/$FPK_ASSET"
+
+      - name: Upload FPK artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-fpk-${{ github.run_id }}
+          path: dist/release/${{ needs.metadata.outputs.fpk_asset }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
+  build-dmg:
+    name: Build unnotarized macOS DMG
+    needs: metadata
+    if: ${{ needs.metadata.outputs.release_state != 'complete' }}
+    runs-on: macos-26
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/reader-web/package-lock.json
+
+      - name: Install shared reader dependencies
+        run: npm ci --prefix packages/reader-web --no-audit --no-fund
+
+      - name: Validate version and macOS sources
+        run: |
+          npm run version:check
+          npm run lint:macos
+          npm run test:macos
+
+      - name: Build ad-hoc signed, unnotarized DMG
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          DERIVED_DATA: ${{ runner.temp }}/FluxReaderRelease
+          OUTPUT_DIR: ${{ github.workspace }}/dist/release
+          DMG_ASSET: ${{ needs.metadata.outputs.dmg_asset }}
+        run: |
+          npm run pack:macos
+          test -s "dist/release/$DMG_ASSET"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-dmg-${{ github.run_id }}
+          path: dist/release/${{ needs.metadata.outputs.dmg_asset }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - metadata
+      - build-fpk
+      - build-dmg
+    if: ${{ needs.metadata.outputs.release_state != 'complete' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.metadata.outputs.version }}
+      TAG: ${{ needs.metadata.outputs.tag }}
+      FPK_ASSET: ${{ needs.metadata.outputs.fpk_asset }}
+      DMG_ASSET: ${{ needs.metadata.outputs.dmg_asset }}
+      RELEASE_MARKER: "<!-- flux-reader-release-workflow -->"
+      RELEASE_NOTES: |
+        <!-- flux-reader-release-workflow -->
+        本版本同时提供 fnOS 安装包和 macOS 安装镜像。
+
+        ⚠️ macOS DMG 仅使用 ad-hoc 签名，未使用 Apple Developer ID 签名，也未经过 Apple 公证。首次打开时 macOS Gatekeeper 可能显示警告或阻止启动，仅建议用于自用、测试或受控环境。
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # publish 会在创建 Release 前重新拉取远端 tag；保留该 job 的短期 token
+          # 以兼容私有仓库，checkout 的 post step 会在 job 结束时清理凭据。
+          persist-credentials: true
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*-${{ github.run_id }}
+          merge-multiple: true
+          path: dist/release
+
+      - name: Generate and verify checksums
+        run: |
+          set -euo pipefail
+          cd dist/release
+          test -s "$FPK_ASSET"
+          test -s "$DMG_ASSET"
+          sha256sum "$FPK_ASSET" "$DMG_ASSET" > SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+
+      - name: Publish immutable version
+        run: |
+          set -euo pipefail
+
+          git fetch --force --tags origin
+          tag_exists=false
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            tag_exists=true
+            tag_sha="$(git rev-list -n 1 "refs/tags/$TAG")"
+            if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "$TAG 已指向 $tag_sha，当前提交为 $GITHUB_SHA。拒绝移动既有 tag。" >&2
+              exit 1
+            fi
+          fi
+
+          release_json=""
+          if release_json="$(gh release view "$TAG" --json isDraft,assets,body,targetCommitish 2>/dev/null)"; then
+            if [[ "$(jq -r '.isDraft' <<<"$release_json")" == "false" ]]; then
+              for asset in "$FPK_ASSET" "$DMG_ASSET" SHA256SUMS; do
+                if ! jq -e --arg name "$asset" '.assets[] | select(.name == $name)' <<<"$release_json" >/dev/null; then
+                  echo "$TAG 已发布但缺少资产 $asset；拒绝覆盖公开 Release。" >&2
+                  exit 1
+                fi
+              done
+              echo "$TAG 已完整发布，无需重复上传。"
+              exit 0
+            fi
+
+            target="$(jq -r '.targetCommitish // ""' <<<"$release_json")"
+            body="$(jq -r '.body // ""' <<<"$release_json")"
+            # Existing tags make targetCommitish advisory; the tag SHA was checked above.
+            if [[ "$body" != *"$RELEASE_MARKER"* \
+              || ( "$tag_exists" != "true" && "$target" != "$GITHUB_SHA" ) ]]; then
+              echo "$TAG 存在非本工作流创建的草稿 Release，拒绝自动接管。" >&2
+              exit 1
+            fi
+
+            gh release upload "$TAG" \
+              "dist/release/$FPK_ASSET" \
+              "dist/release/$DMG_ASSET" \
+              "dist/release/SHA256SUMS" \
+              --clobber
+            gh release edit "$TAG" --draft=false
+          elif [[ "$tag_exists" == "true" ]]; then
+            gh release create "$TAG" \
+              "dist/release/$FPK_ASSET" \
+              "dist/release/$DMG_ASSET" \
+              "dist/release/SHA256SUMS" \
+              --verify-tag \
+              --title "Flux Reader $VERSION" \
+              --notes "$RELEASE_NOTES" \
+              --generate-notes
+          else
+            gh release create "$TAG" \
+              "dist/release/$FPK_ASSET" \
+              "dist/release/$DMG_ASSET" \
+              "dist/release/SHA256SUMS" \
+              --target "$GITHUB_SHA" \
+              --title "Flux Reader $VERSION" \
+              --notes "$RELEASE_NOTES" \
+              --generate-notes
+          fi
+
+          release_json="$(gh release view "$TAG" --json isDraft,assets)"
+          if [[ "$(jq -r '.isDraft' <<<"$release_json")" != "false" ]]; then
+            echo "$TAG 仍处于草稿状态。" >&2
+            exit 1
+          fi
+          for asset in "$FPK_ASSET" "$DMG_ASSET" SHA256SUMS; do
+            jq -e --arg name "$asset" '.assets[] | select(.name == $name)' <<<"$release_json" >/dev/null
+          done

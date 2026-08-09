@@ -11,15 +11,26 @@
     "dev:backend": "npm --prefix apps/fnos/backend run dev",
     "dev:reader": "npm --prefix packages/reader-web run dev",
     "dev:frontend": "npm run dev:reader",
-    "test": "npm run test:fnos && npm run test:reader",
+    "test": "npm run test:release && npm run test:fnos && npm run test:reader",
+    "test:release": "node --test scripts/test/*.test.js",
     "test:fnos": "npm --prefix apps/fnos/backend test",
     "test:reader": "npm --prefix packages/reader-web test",
     "test:frontend": "npm run test:reader",
+    "lint:macos": "xcrun swift-format lint --strict --recursive apps/macos/FluxReader apps/macos/FluxReaderTests apps/macos/FluxReaderUITests",
+    "test:macos": "xcodebuild -project apps/macos/FluxReader.xcodeproj -scheme FluxReader -configuration Debug -destination 'platform=macOS' -derivedDataPath .build/macos CODE_SIGNING_ALLOWED=NO -only-testing:FluxReaderTests test",
+    "test:macos-ui-build": "xcodebuild -project apps/macos/FluxReader.xcodeproj -scheme FluxReaderUITests -configuration Debug -destination 'platform=macOS' -derivedDataPath .build/macos-ui-build CODE_SIGNING_ALLOWED=NO build-for-testing",
+    "test:macos-ui": "xcodebuild -project apps/macos/FluxReader.xcodeproj -scheme FluxReaderUITests -configuration Debug -destination 'platform=macOS' -derivedDataPath .build/macos-ui-runtime CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual test",
+    "test:all": "npm run version:check && npm test && npm run test:macos",
     "build": "npm run build:fnos",
     "build:reader": "npm --prefix packages/reader-web run build",
+    "build:macos-renderer": "npm --prefix packages/reader-web run build:macos",
     "build:fnos": "node scripts/build-fnos.js",
+    "build:macos": "xcodebuild -project apps/macos/FluxReader.xcodeproj -scheme FluxReader -configuration Debug -destination 'platform=macOS' -derivedDataPath .build/macos CODE_SIGNING_ALLOWED=NO build",
+    "version:check": "node scripts/sync-version.js --check",
+    "version:sync": "node scripts/sync-version.js --write",
     "pack": "npm run pack:fnos",
-    "pack:fnos": "npm run build:fnos && cd apps/fnos/package && fnpack build"
+    "pack:fnos": "npm run build:fnos && cd apps/fnos/package && fnpack build",
+    "pack:macos": "bash scripts/build-macos-dmg.sh"
   },
   "engines": {
     "node": ">=20.19.0"

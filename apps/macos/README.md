@@ -1,29 +1,114 @@
 # Flux Reader for macOS
 
-这里是 Flux Reader 原生 macOS 客户端的应用目录。目前 monorepo 的平台边界已经
-建立，SwiftUI / AppKit 工程将在这里实现。
+这里是 Flux Reader 原生 macOS 客户端。应用外壳使用 SwiftUI / AppKit，正文通过
+WKWebView 复用 monorepo 内的 React 阅读器，不依赖 Electron 或第三方 Swift 包。
 
-## 计划架构
+## 当前能力
+
+- 原生 SwiftUI 窗口、菜单与导航栏
+- 使用系统文件选择器打开 `.md`、`.markdown`、`.mdx`
+- 同时打开多个文件夹，在侧边栏按目录树浏览 Markdown 文稿
+- 文件名优先的工作区全文搜索，最多返回 100 条结果
+- 使用 FSEvents 递归监听工作区，内容变化后自动刷新索引和当前预览
+- 支持 Finder 文件关联启动，以及文件或文件夹拖放打开
+- 最近文稿最多保留 12 项，可单项移除或清空
+- 使用 security-scoped bookmarks 在重启后恢复最多 8 个文件夹与最近文稿授权
+- App Sandbox 下的用户选择文件只读权限
+- 2 MB 文件上限、普通文件检查和 UTF-8 校验
+- GFM 表格、任务列表、KaTeX、Mermaid 与 Shiki 代码高亮
+- 跟随系统深浅色主题，外部链接交给默认系统应用打开
+- 原生剪贴板 bridge；Web 渲染器异常时自动降级到 `AttributedString`
+- 自定义只读 URL scheme、严格 CSP 和非持久化 WebKit 数据存储
+- 安全加载工作区内的相对路径图片，阻止目录穿越、符号链接逃逸与非图片资源
+- 文件读取、文件夹索引、持久书签与渲染器资源边界单元测试
+- XCUITest 启动和 Markdown 渲染冒烟测试、完整 AppIcon 资源
+
+## 开发
+
+要求 macOS 14+、支持 Swift 6 的 Xcode，以及 Node.js 20.19+。首次开发先安装共享
+阅读器依赖：
+
+```bash
+npm run install:reader
+
+open apps/macos/FluxReader.xcodeproj
+
+npm run build:macos-renderer
+npm run build:macos
+npm run lint:macos
+npm run test:macos
+npm run test:macos-ui-build
+npm run test:macos-ui
+npm run pack:macos
+```
+
+Xcode 的 `Embed Shared Reader` 构建阶段会自动执行 `build:macos` 并把产物复制到
+App Bundle 的 `Contents/Resources/Reader`，因此通常无需单独运行
+`build:macos-renderer`；该命令主要用于只验证 Web 产物。
+
+`test:macos-ui` 会启动真实应用，需要先在「系统设置 → 隐私与安全性 → 辅助功能」
+允许执行测试的终端或 Xcode。CI 与常规回归使用 `test:macos-ui-build` 编译 UI 套件，
+避免无 UI 授权的 runner 等待系统交互。
+
+`pack:macos` 默认构建 Intel + Apple Silicon Universal 应用，使用 ad-hoc 签名并在
+`dist/release/` 生成文件名带 `unnotarized` 的 DMG。该产物没有 Developer ID
+身份签名和 Apple 公证，只用于自用、测试或受控环境；Gatekeeper 警告属于预期。
+
+### Developer ID 签名与公证
+
+已安装 Developer ID Application 证书时，可以使用 App Store Connect API key 完成
+正式分发构建：
+
+```bash
+MACOS_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" \
+APPLE_NOTARY_KEY_PATH="/secure/path/AuthKey_KEYID.p8" \
+APPLE_NOTARY_KEY_ID="KEYID" \
+APPLE_NOTARY_ISSUER_ID="ISSUER-UUID" \
+npm run pack:macos
+```
+
+团队 API key 需要 `APPLE_NOTARY_ISSUER_ID`；Individual API key 可以省略它。脚本会
+签名 `.app` 与 `.dmg`、等待 Apple 公证、装订并验证 ticket，再用 Gatekeeper 评估
+产物。成功产物名为 `Flux-Reader-<version>-universal.dmg`。私钥与证书不得提交仓库。
+
+GitHub 的 `Notarized macOS Release` 手动工作流使用以下 Actions secrets：
+
+- `APPLE_DEVELOPER_ID_APPLICATION`：完整的 Developer ID Application identity
+- `APPLE_DEVELOPER_ID_CERTIFICATE_BASE64`：`.p12` 文件的 Base64 内容
+- `APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD`：`.p12` 密码
+- `APPLE_NOTARY_KEY_BASE64`：App Store Connect `.p8` 私钥的 Base64 内容
+- `APPLE_NOTARY_KEY_ID`：API key ID
+- `APPLE_NOTARY_ISSUER_ID`：团队 key 的 issuer UUID；Individual key 可留空
+
+先等待标准 `Release` 工作流发布同版本 tag，再手动运行公证工作流。它不会覆盖已有
+资产，而是把正式 DMG 与独立 `.sha256` 文件附加到同一 GitHub Release。
+
+## 当前架构
 
 - SwiftUI + AppKit：窗口、菜单、目录树、文件选择和系统集成
-- WKWebView：加载 `packages/reader-web` 的本地构建产物
-- Swift 文件服务：读取用户授权的文件和目录
-- Security-scoped bookmarks：在 App Sandbox 中持久保存目录授权
+- WKWebView bridge：加载 `packages/reader-web` 的高级渲染产物并传递文稿、主题和剪贴板消息
+- 原生 `AttributedString`：WebKit 或资源加载失败时的降级预览
+- Swift 文件服务：在后台递归索引用户授权目录；跳过隐藏项、包和符号链接
+- Security-scoped bookmarks：持久保存最多 8 个工作文件夹与最多 12 个最近文稿
+- FSEvents + 搜索服务：防抖刷新多个目录，并在后台执行文件名和正文搜索
 
-开始实现前，需要把 `packages/reader-web` 中现有的 fnOS API / SDK 调用抽象为平台
-bridge。macOS 端由 Swift 注入 bridge，Markdown 渲染核心保持共享。
+为保护性能，单次文件夹扫描最多遍历 10,000 个项目、最多深入 20 层。文件夹内容
+变化会自动触发防抖重新索引，也可以点击侧边栏按钮手动刷新。相对图片只能读取已
+授权工作区内的普通图片文件，单张上限 25 MB；越界路径和符号链接逃逸都会被拒绝。
 
-计划中的目录布局：
+目录布局：
 
 ```text
 apps/macos/
 ├── FluxReader.xcodeproj
 ├── FluxReader/
 │   ├── App/
-│   ├── Features/
+│   ├── Features/Reader/
+│   ├── Models/
 │   ├── Services/
-│   └── Resources/Reader/   # packages/reader-web 的构建产物
-└── FluxReaderTests/
+│   └── Resources/
+├── FluxReaderTests/
+└── FluxReaderUITests/
 ```
 
 macOS 客户端不应复制共享阅读器源码；平台无关的渲染改动统一提交到

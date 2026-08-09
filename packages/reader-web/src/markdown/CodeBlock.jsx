@@ -3,6 +3,7 @@
  * 这样在 NAS 这类较弱硬件上也不会白屏或卡顿。
  */
 import { useEffect, useRef, useState } from 'react';
+import { writeClipboardText } from '../platform/clipboard';
 import { highlightCode, isHugeCode } from './highlight';
 import Mermaid from './Mermaid';
 
@@ -54,7 +55,7 @@ function HighlightedCodeBlock({ code, language, theme }) {
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(code);
+      await writeClipboardText(code);
       setCopied(true);
       setTimeout(() => aliveRef.current && setCopied(false), 1500);
     } catch {

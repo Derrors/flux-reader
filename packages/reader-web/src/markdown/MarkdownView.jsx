@@ -6,7 +6,7 @@
  *   其中代码块被替换为占位 div，在此处换成 <CodeBlock/> 组件。
  */
 import { useMemo } from 'react';
-import parse, { domToReact, Element } from 'html-react-parser';
+import parse, { attributesToProps, domToReact, Element } from 'html-react-parser';
 import { preprocess } from './preprocess';
 import { renderToSafeHtml } from './pipeline';
 import CodeBlock from './CodeBlock';
@@ -24,7 +24,22 @@ function isImageOnlyParagraph(node) {
   return meaningful.every((c) => c instanceof Element && c.name === 'img');
 }
 
-export default function MarkdownView({ content, theme = 'light', className = '' }) {
+function resolvedImageSource(source, resolveImageSource) {
+  const src = String(source || '').trim();
+  if (!src) return null;
+  if (/^https?:\/\//i.test(src) || /^data:image\//i.test(src)) return src;
+  if (/^(?:javascript|data|vbscript|file):/i.test(src) || src.startsWith('//')) {
+    return null;
+  }
+  return resolveImageSource?.(src) || null;
+}
+
+export default function MarkdownView({
+  content,
+  theme = 'light',
+  className = '',
+  resolveImageSource,
+}) {
   const html = useMemo(() => {
     if (!content) return '';
     return renderToSafeHtml(preprocess(content));
@@ -36,6 +51,15 @@ export default function MarkdownView({ content, theme = 'light', className = '' 
     const options = {
       replace(node) {
         if (!(node instanceof Element)) return undefined;
+
+        if (node.name === 'img') {
+          const src = resolvedImageSource(node.attribs?.src, resolveImageSource);
+          if (!src) return <></>;
+
+          const props = attributesToProps(node.attribs || {});
+          delete props.srcSet;
+          return <img {...props} src={src} />;
+        }
 
         // 代码块占位 → CodeBlock 组件
         if (node.name === 'div' && node.attribs?.class === 'code-placeholder') {
@@ -79,7 +103,7 @@ export default function MarkdownView({ content, theme = 'light', className = '' 
     };
 
     return parse(html, options);
-  }, [html, theme]);
+  }, [html, resolveImageSource, theme]);
 
   return (
     <div className={`flow-markdown-body ${className}`.trim()}>

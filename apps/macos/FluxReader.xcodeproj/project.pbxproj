@@ -1,0 +1,697 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A30000000000000000000001 /* FluxReaderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* FluxReaderApp.swift */; };
+		A30000000000000000000002 /* ReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* ReaderView.swift */; };
+		A30000000000000000000003 /* NativeMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* NativeMarkdownView.swift */; };
+		A30000000000000000000004 /* ReaderViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* ReaderViewModel.swift */; };
+		A30000000000000000000005 /* MarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* MarkdownDocument.swift */; };
+		A30000000000000000000006 /* MarkdownContentType.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* MarkdownContentType.swift */; };
+		A30000000000000000000007 /* LocalFileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* LocalFileService.swift */; };
+		A30000000000000000000008 /* LocalFileServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* LocalFileServiceTests.swift */; };
+		A30000000000000000000009 /* MarkdownRendererView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* MarkdownRendererView.swift */; };
+		A3000000000000000000000A /* WebMarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000E /* WebMarkdownView.swift */; };
+		A3000000000000000000000B /* WebRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* WebRendererTests.swift */; };
+		A3000000000000000000000C /* LibraryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* LibraryModels.swift */; };
+		A3000000000000000000000D /* FolderIndexService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* FolderIndexService.swift */; };
+		A3000000000000000000000E /* SecurityScopedBookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* SecurityScopedBookmarkStore.swift */; };
+		A3000000000000000000000F /* FolderIndexServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* FolderIndexServiceTests.swift */; };
+		A30000000000000000000010 /* SecurityScopedBookmarkStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* SecurityScopedBookmarkStoreTests.swift */; };
+		A30000000000000000000011 /* ReaderViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* ReaderViewModelTests.swift */; };
+		A30000000000000000000012 /* DocumentResourceSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* DocumentResourceSchemeHandler.swift */; };
+		A30000000000000000000013 /* WorkspaceSearchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* WorkspaceSearchService.swift */; };
+		A30000000000000000000014 /* WorkspaceWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* WorkspaceWatcher.swift */; };
+		A30000000000000000000015 /* WorkspaceSearchServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* WorkspaceSearchServiceTests.swift */; };
+		A30000000000000000000016 /* WorkspaceWatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001A /* WorkspaceWatcherTests.swift */; };
+		A30000000000000000000017 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001B /* Assets.xcassets */; };
+		A30000000000000000000018 /* FluxReaderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001C /* FluxReaderUITests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A80000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A50000000000000000000001;
+			remoteInfo = FluxReader;
+		};
+		A80000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A50000000000000000000001;
+			remoteInfo = FluxReader;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* FluxReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxReaderApp.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* ReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderView.swift; sourceTree = "<group>"; };
+		A20000000000000000000003 /* NativeMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeMarkdownView.swift; sourceTree = "<group>"; };
+		A20000000000000000000004 /* ReaderViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderViewModel.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocument.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* MarkdownContentType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownContentType.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* LocalFileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalFileService.swift; sourceTree = "<group>"; };
+		A20000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A20000000000000000000009 /* FluxReader.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluxReader.entitlements; sourceTree = "<group>"; };
+		A2000000000000000000000A /* LocalFileServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalFileServiceTests.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* FluxReader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FluxReader.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000000000000000000000C /* FluxReaderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluxReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000000000000000000000D /* MarkdownRendererView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRendererView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000E /* WebMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebMarkdownView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000F /* WebRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRendererTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000010 /* LibraryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModels.swift; sourceTree = "<group>"; };
+		A20000000000000000000011 /* FolderIndexService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderIndexService.swift; sourceTree = "<group>"; };
+		A20000000000000000000012 /* SecurityScopedBookmarkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedBookmarkStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000013 /* FolderIndexServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderIndexServiceTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000014 /* SecurityScopedBookmarkStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedBookmarkStoreTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000015 /* ReaderViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderViewModelTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000016 /* DocumentResourceSchemeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentResourceSchemeHandler.swift; sourceTree = "<group>"; };
+		A20000000000000000000017 /* WorkspaceSearchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSearchService.swift; sourceTree = "<group>"; };
+		A20000000000000000000018 /* WorkspaceWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceWatcher.swift; sourceTree = "<group>"; };
+		A20000000000000000000019 /* WorkspaceSearchServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSearchServiceTests.swift; sourceTree = "<group>"; };
+		A2000000000000000000001A /* WorkspaceWatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceWatcherTests.swift; sourceTree = "<group>"; };
+		A2000000000000000000001B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A2000000000000000000001C /* FluxReaderUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxReaderUITests.swift; sourceTree = "<group>"; };
+		A2000000000000000000001D /* FluxReaderUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluxReaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A40000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A40000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A40000000000000000000009 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A10000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000004 /* FluxReader */,
+				A1000000000000000000000B /* FluxReaderTests */,
+				A1000000000000000000000C /* FluxReaderUITests */,
+				A10000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000B /* FluxReader.app */,
+				A2000000000000000000000C /* FluxReaderTests.xctest */,
+				A2000000000000000000001D /* FluxReaderUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000004 /* FluxReader */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000005 /* App */,
+				A10000000000000000000006 /* Features */,
+				A10000000000000000000008 /* Models */,
+				A10000000000000000000009 /* Services */,
+				A1000000000000000000000A /* Resources */,
+			);
+			path = FluxReader;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000005 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000001 /* FluxReaderApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000006 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000007 /* Reader */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000007 /* Reader */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000002 /* ReaderView.swift */,
+				A2000000000000000000000D /* MarkdownRendererView.swift */,
+				A20000000000000000000003 /* NativeMarkdownView.swift */,
+				A2000000000000000000000E /* WebMarkdownView.swift */,
+				A20000000000000000000016 /* DocumentResourceSchemeHandler.swift */,
+				A20000000000000000000004 /* ReaderViewModel.swift */,
+			);
+			path = Reader;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000008 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000005 /* MarkdownDocument.swift */,
+				A20000000000000000000006 /* MarkdownContentType.swift */,
+				A20000000000000000000010 /* LibraryModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000009 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000007 /* LocalFileService.swift */,
+				A20000000000000000000011 /* FolderIndexService.swift */,
+				A20000000000000000000012 /* SecurityScopedBookmarkStore.swift */,
+				A20000000000000000000017 /* WorkspaceSearchService.swift */,
+				A20000000000000000000018 /* WorkspaceWatcher.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000000A /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000008 /* Info.plist */,
+				A20000000000000000000009 /* FluxReader.entitlements */,
+				A2000000000000000000001B /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000000B /* FluxReaderTests */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000A /* LocalFileServiceTests.swift */,
+				A2000000000000000000000F /* WebRendererTests.swift */,
+				A20000000000000000000013 /* FolderIndexServiceTests.swift */,
+				A20000000000000000000014 /* SecurityScopedBookmarkStoreTests.swift */,
+				A20000000000000000000015 /* ReaderViewModelTests.swift */,
+				A20000000000000000000019 /* WorkspaceSearchServiceTests.swift */,
+				A2000000000000000000001A /* WorkspaceWatcherTests.swift */,
+			);
+			path = FluxReaderTests;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000000C /* FluxReaderUITests */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000001C /* FluxReaderUITests.swift */,
+			);
+			path = FluxReaderUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A50000000000000000000001 /* FluxReader */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A70000000000000000000002 /* Build configuration list for PBXNativeTarget "FluxReader" */;
+			buildPhases = (
+				A40000000000000000000001 /* Sources */,
+				A40000000000000000000002 /* Frameworks */,
+				A40000000000000000000003 /* Resources */,
+				A40000000000000000000007 /* Embed Shared Reader */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FluxReader;
+			productName = FluxReader;
+			productReference = A2000000000000000000000B /* FluxReader.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A50000000000000000000002 /* FluxReaderTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A70000000000000000000003 /* Build configuration list for PBXNativeTarget "FluxReaderTests" */;
+			buildPhases = (
+				A40000000000000000000004 /* Sources */,
+				A40000000000000000000005 /* Frameworks */,
+				A40000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A80000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = FluxReaderTests;
+			productName = FluxReaderTests;
+			productReference = A2000000000000000000000C /* FluxReaderTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A50000000000000000000003 /* FluxReaderUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A70000000000000000000004 /* Build configuration list for PBXNativeTarget "FluxReaderUITests" */;
+			buildPhases = (
+				A40000000000000000000008 /* Sources */,
+				A40000000000000000000009 /* Frameworks */,
+				A4000000000000000000000A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A80000000000000000000004 /* PBXTargetDependency */,
+			);
+			name = FluxReaderUITests;
+			productName = FluxReaderUITests;
+			productReference = A2000000000000000000001D /* FluxReaderUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					A50000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					A50000000000000000000002 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = A50000000000000000000001;
+					};
+					A50000000000000000000003 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = A50000000000000000000001;
+					};
+				};
+			};
+			buildConfigurationList = A70000000000000000000001 /* Build configuration list for PBXProject "FluxReader" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A10000000000000000000002;
+			productRefGroup = A10000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A50000000000000000000001 /* FluxReader */,
+				A50000000000000000000002 /* FluxReaderTests */,
+				A50000000000000000000003 /* FluxReaderUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A40000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A30000000000000000000017 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A40000000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A4000000000000000000000A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A40000000000000000000007 /* Embed Shared Reader */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed Shared Reader";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\n\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:${PATH}\"\nREPO_ROOT=\"${SRCROOT}/../..\"\nREADER_DIR=\"${REPO_ROOT}/packages/reader-web\"\nRENDERER_OUTPUT=\"${READER_DIR}/dist-macos\"\nBUNDLE_DESTINATION=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Reader\"\n\nif ! command -v npm >/dev/null 2>&1; then\n  echo \"error: npm not found. Install Node.js 20.19+ and reopen Xcode.\"\n  exit 1\nfi\n\nif [ ! -x \"${READER_DIR}/node_modules/.bin/vite\" ]; then\n  echo \"error: Shared reader dependencies are missing. Run npm run install:reader in ${REPO_ROOT}.\"\n  exit 1\nfi\n\nnpm --prefix \"${READER_DIR}\" run build:macos\n/bin/rm -rf \"${BUNDLE_DESTINATION}\"\n/bin/mkdir -p \"${BUNDLE_DESTINATION}\"\n/usr/bin/ditto \"${RENDERER_OUTPUT}\" \"${BUNDLE_DESTINATION}\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A40000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A30000000000000000000001 /* FluxReaderApp.swift in Sources */,
+				A30000000000000000000002 /* ReaderView.swift in Sources */,
+				A30000000000000000000003 /* NativeMarkdownView.swift in Sources */,
+				A30000000000000000000004 /* ReaderViewModel.swift in Sources */,
+				A30000000000000000000005 /* MarkdownDocument.swift in Sources */,
+				A30000000000000000000006 /* MarkdownContentType.swift in Sources */,
+				A30000000000000000000007 /* LocalFileService.swift in Sources */,
+				A30000000000000000000009 /* MarkdownRendererView.swift in Sources */,
+				A3000000000000000000000A /* WebMarkdownView.swift in Sources */,
+				A3000000000000000000000C /* LibraryModels.swift in Sources */,
+				A3000000000000000000000D /* FolderIndexService.swift in Sources */,
+				A3000000000000000000000E /* SecurityScopedBookmarkStore.swift in Sources */,
+				A30000000000000000000012 /* DocumentResourceSchemeHandler.swift in Sources */,
+				A30000000000000000000013 /* WorkspaceSearchService.swift in Sources */,
+				A30000000000000000000014 /* WorkspaceWatcher.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A40000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A30000000000000000000008 /* LocalFileServiceTests.swift in Sources */,
+				A3000000000000000000000B /* WebRendererTests.swift in Sources */,
+				A3000000000000000000000F /* FolderIndexServiceTests.swift in Sources */,
+				A30000000000000000000010 /* SecurityScopedBookmarkStoreTests.swift in Sources */,
+				A30000000000000000000011 /* ReaderViewModelTests.swift in Sources */,
+				A30000000000000000000015 /* WorkspaceSearchServiceTests.swift in Sources */,
+				A30000000000000000000016 /* WorkspaceWatcherTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A40000000000000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A30000000000000000000018 /* FluxReaderUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A80000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A50000000000000000000001 /* FluxReader */;
+			targetProxy = A80000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		A80000000000000000000004 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A50000000000000000000001 /* FluxReader */;
+			targetProxy = A80000000000000000000003 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A60000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A60000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		A60000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = FluxReader/Resources/FluxReader.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FluxReader/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.18;
+				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		A60000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = FluxReader/Resources/FluxReader.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FluxReader/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.18;
+				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		A60000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluxReader.app/Contents/MacOS/FluxReader";
+			};
+			name = Debug;
+		};
+		A60000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluxReader.app/Contents/MacOS/FluxReader";
+			};
+			name = Release;
+		};
+		A60000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = FluxReader;
+			};
+			name = Debug;
+		};
+		A60000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = FluxReader;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A70000000000000000000001 /* Build configuration list for PBXProject "FluxReader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A60000000000000000000001 /* Debug */,
+				A60000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A70000000000000000000002 /* Build configuration list for PBXNativeTarget "FluxReader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A60000000000000000000003 /* Debug */,
+				A60000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A70000000000000000000003 /* Build configuration list for PBXNativeTarget "FluxReaderTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A60000000000000000000005 /* Debug */,
+				A60000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A70000000000000000000004 /* Build configuration list for PBXNativeTarget "FluxReaderUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A60000000000000000000007 /* Debug */,
+				A60000000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A10000000000000000000001 /* Project object */;
+}
