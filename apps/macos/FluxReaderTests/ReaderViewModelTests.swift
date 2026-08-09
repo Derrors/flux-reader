@@ -82,6 +82,55 @@ final class ReaderViewModelTests: XCTestCase {
   }
 
   @MainActor
+  func testImporterRoutesDocumentsAndFoldersThroughOnePresentation() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    try Data("# Guide".utf8).write(to: markdownURL)
+    let store = InMemoryBookmarkStore()
+    let viewModel = ReaderViewModel(
+      bookmarkStore: store,
+      workspaceWatcher: TestWorkspaceWatcher()
+    )
+
+    viewModel.presentFileImporter()
+    XCTAssertEqual(viewModel.importerRequest, .document)
+    XCTAssertTrue(viewModel.isImporterPresented)
+
+    viewModel.handleImporterResult(.success([markdownURL]))
+    XCTAssertFalse(viewModel.isImporterPresented)
+    await waitUntil { viewModel.currentDocument != nil }
+    XCTAssertEqual(viewModel.currentDocument?.content, "# Guide")
+
+    viewModel.presentFolderImporter()
+    XCTAssertEqual(viewModel.importerRequest, .folders)
+    XCTAssertTrue(viewModel.isImporterPresented)
+
+    viewModel.handleImporterResult(.success([temporaryDirectory]))
+    XCTAssertFalse(viewModel.isImporterPresented)
+    await waitUntil { viewModel.workspaces.count == 1 }
+    XCTAssertEqual(viewModel.workspaces.first?.rootURL, temporaryDirectory.standardizedFileURL)
+  }
+
+  @MainActor
+  func testImporterCanRetryAfterCancellation() {
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher()
+    )
+    let cancellation = NSError(
+      domain: NSCocoaErrorDomain,
+      code: NSUserCancelledError
+    )
+
+    viewModel.presentFileImporter()
+    viewModel.handleImporterResult(.failure(cancellation))
+    XCTAssertFalse(viewModel.isImporterPresented)
+
+    viewModel.presentFileImporter()
+    XCTAssertEqual(viewModel.importerRequest, .document)
+    XCTAssertTrue(viewModel.isImporterPresented)
+  }
+
+  @MainActor
   func testFailedWorkspaceRefreshKeepsPersistedWorkspace() async throws {
     let store = InMemoryBookmarkStore()
     store.workspaceURLs = [temporaryDirectory]

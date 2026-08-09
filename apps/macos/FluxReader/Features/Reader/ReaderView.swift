@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct ReaderView: View {
   @ObservedObject var viewModel: ReaderViewModel
+  @Binding var appearance: AppAppearance
 
   var body: some View {
     NavigationSplitView {
@@ -15,6 +16,20 @@ struct ReaderView: View {
     .frame(minWidth: 860, minHeight: 580)
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
+        Menu {
+          Picker("外观", selection: $appearance) {
+            ForEach(AppAppearance.allCases) { option in
+              Label(option.title, systemImage: option.systemImage)
+                .tag(option)
+            }
+          }
+        } label: {
+          Label("外观", systemImage: appearance.systemImage)
+        }
+        .help("切换跟随系统、浅色或深色外观")
+        .accessibilityIdentifier("flux.appearance")
+        .accessibilityValue(appearance.title)
+
         if !viewModel.workspaces.isEmpty {
           Button {
             viewModel.refreshAllWorkspaces()
@@ -40,16 +55,11 @@ struct ReaderView: View {
       }
     }
     .fileImporter(
-      isPresented: $viewModel.isFileImporterPresented,
-      allowedContentTypes: MarkdownContentType.allowedContentTypes,
-      allowsMultipleSelection: false,
-      onCompletion: viewModel.handleImportResult
-    )
-    .fileImporter(
-      isPresented: $viewModel.isFolderImporterPresented,
-      allowedContentTypes: [.folder],
-      allowsMultipleSelection: true,
-      onCompletion: viewModel.handleFolderImportResult
+      isPresented: $viewModel.isImporterPresented,
+      allowedContentTypes: viewModel.importerRequest == .document
+        ? MarkdownContentType.allowedContentTypes : [.folder],
+      allowsMultipleSelection: viewModel.importerRequest == .folders,
+      onCompletion: viewModel.handleImporterResult
     )
     .onOpenURL(perform: viewModel.open)
     .dropDestination(for: URL.self) { urls, _ in

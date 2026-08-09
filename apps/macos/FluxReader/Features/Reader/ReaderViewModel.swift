@@ -10,6 +10,11 @@ final class ReaderViewModel: ObservableObject {
     case failure(String)
   }
 
+  enum ImporterRequest: Equatable {
+    case document
+    case folders
+  }
+
   @Published private(set) var phase: Phase = .empty
   @Published private(set) var workspaces: [WorkspaceSnapshot] = []
   @Published private(set) var recentDocuments: [RecentDocument] = []
@@ -21,8 +26,8 @@ final class ReaderViewModel: ObservableObject {
   @Published var searchQuery = "" {
     didSet { scheduleSearch() }
   }
-  @Published var isFileImporterPresented = false
-  @Published var isFolderImporterPresented = false
+  @Published private(set) var importerRequest: ImporterRequest = .document
+  @Published var isImporterPresented = false
 
   private let fileService: any FileAccessing
   private let folderService: any FolderIndexing
@@ -90,25 +95,29 @@ final class ReaderViewModel: ObservableObject {
   }
 
   func presentFileImporter() {
-    isFileImporterPresented = true
+    importerRequest = .document
+    isImporterPresented = true
   }
 
   func presentFolderImporter() {
-    isFolderImporterPresented = true
+    importerRequest = .folders
+    isImporterPresented = true
   }
 
-  func handleImportResult(_ result: Result<[URL], Error>) {
-    handleImporterResult(result) { [weak self] urls in
-      guard let self, let url = urls.first else { return }
-      open(url)
-    }
-  }
+  func handleImporterResult(_ result: Result<[URL], Error>) {
+    let request = importerRequest
+    isImporterPresented = false
 
-  func handleFolderImportResult(_ result: Result<[URL], Error>) {
-    handleImporterResult(result) { [weak self] urls in
+    resolveImporterResult(result) { [weak self] urls in
       guard let self else { return }
-      for url in urls {
-        loadWorkspace(at: url, reason: .open)
+      switch request {
+      case .document:
+        guard let url = urls.first else { return }
+        open(url)
+      case .folders:
+        for url in urls {
+          loadWorkspace(at: url, reason: .open)
+        }
       }
     }
   }
@@ -179,7 +188,7 @@ final class ReaderViewModel: ObservableObject {
     return true
   }
 
-  private func handleImporterResult(
+  private func resolveImporterResult(
     _ result: Result<[URL], Error>,
     onSuccess: ([URL]) -> Void
   ) {
