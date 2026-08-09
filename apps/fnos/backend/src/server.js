@@ -46,13 +46,30 @@ function requireUser(req, res, next) {
       return res.status(503).json({
         error: 'LOCAL_DEV_NO_GATEWAY',
         message:
-          '当前不在 fnOS 环境中（无网关 Header、无 TRIM_API_TOKEN）。文件接口需装到 NAS 后使用；渲染功能可直接用示例文档预览。',
+          '当前不在 fnOS 环境中（无网关 Header、无 TRIM_API_TOKEN）。文件接口需安装到 NAS 后使用。',
       });
     }
     return res.status(401).json({ error: 'NO_USER', message: '未获取到登录用户身份' });
   }
   req.uid = uid;
   next();
+}
+
+function abortWhenResponseCloses(req, res) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const abortOnPrematureClose = () => {
+    if (!res.writableEnded) abort();
+  };
+  req.once('aborted', abort);
+  res.once('close', abortOnPrematureClose);
+  return {
+    signal: controller.signal,
+    cleanup() {
+      req.removeListener('aborted', abort);
+      res.removeListener('close', abortOnPrematureClose);
+    },
+  };
 }
 
 const api = express.Router();
@@ -88,10 +105,17 @@ api.get('/roots', requireUser, async (req, res) => {
 api.get('/list', requireUser, async (req, res) => {
   const dir = req.query.path;
   if (!dir) return res.status(400).json({ error: 'MISSING_PATH', message: '缺少 path 参数' });
+  const requestLifetime = abortWhenResponseCloses(req, res);
   try {
-    res.json({ entries: await fileAccess.listDirectory(req.uid, String(dir)) });
+    res.json(await fileAccess.listDirectory(req.uid, String(dir), {
+      includeRootMetadata: true,
+      signal: requestLifetime.signal,
+    }));
   } catch (err) {
+    if (err.name === 'AbortError' && requestLifetime.signal.aborted) return;
     res.status(err.status || 500).json({ error: err.reason || 'LIST_FAILED', message: err.message });
+  } finally {
+    requestLifetime.cleanup();
   }
 });
 
@@ -107,13 +131,104 @@ api.get('/file', requireUser, async (req, res) => {
   }
 });
 
-/** 内置示例文档：不依赖开放 API，用于验证渲染效果 */
-api.get('/sample', (req, res) => {
-  const file = path.join(__dirname, 'sample.md');
+/** 只读取 Markdown 元数据，供最近文稿重验和自动刷新探测。 */
+api.get('/file-state', requireUser, async (req, res) => {
+  const p = req.query.path;
+  if (!p) return res.status(400).json({ error: 'MISSING_PATH', message: '缺少 path 参数' });
   try {
-    res.json({ content: fs.readFileSync(file, 'utf8') });
-  } catch {
-    res.status(404).json({ error: 'NO_SAMPLE', message: '示例文档缺失' });
+    res.json(await fileAccess.getMarkdownState(req.uid, String(p)));
+  } catch (err) {
+    res.status(err.status || 500).json({
+      error: err.reason || 'FILE_STATE_FAILED',
+      message: err.message,
+    });
+  }
+});
+
+/** 在一个或多个显式选择的工作区内搜索文件名与 Markdown 正文。 */
+api.get('/search', requireUser, async (req, res) => {
+  const rawPaths = req.query.path;
+  if (!rawPaths) {
+    return res.status(400).json({ error: 'MISSING_PATH', message: '缺少 path 参数' });
+  }
+  const paths = (Array.isArray(rawPaths) ? rawPaths : [rawPaths]).map(String);
+  const requestLifetime = abortWhenResponseCloses(req, res);
+  try {
+    const result = await fileAccess.searchMarkdown(
+      req.uid,
+      paths,
+      String(req.query.q || ''),
+      req.query.limit,
+      { signal: requestLifetime.signal },
+    );
+    res.json(result);
+  } catch (err) {
+    if (err.name === 'AbortError' && requestLifetime.signal.aborted) return;
+    res.status(err.status || 500).json({
+      error: err.reason || 'SEARCH_FAILED',
+      message: err.message,
+    });
+  } finally {
+    requestLifetime.cleanup();
+  }
+});
+
+/**
+ * Markdown 本地相对图片。v 参数由前端用作文稿 revision cache-buster，
+ * 后端无需参与寻址；响应仍禁用缓存，避免跨权限/版本复用。
+ */
+api.get('/resource', requireUser, async (req, res) => {
+  const document = req.query.document;
+  const resourcePath = req.query.path;
+  if (!document || !resourcePath) {
+    return res.status(400).json({
+      error: 'MISSING_RESOURCE_PATH',
+      message: '缺少 document 或 path 参数',
+    });
+  }
+  try {
+    const resource = await fileAccess.readLocalImage(
+      req.uid,
+      String(document),
+      String(resourcePath),
+      req.query.workspace ? String(req.query.workspace) : null,
+    );
+    res.set({
+      'Cache-Control': 'private, no-store',
+      'Content-Type': resource.mimeType,
+      'Content-Length': String(resource.size),
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.send(resource.data);
+  } catch (err) {
+    res.status(err.status || 500).json({
+      error: err.reason || 'RESOURCE_FAILED',
+      message: err.message,
+    });
+  }
+});
+
+/** 递归可见 Markdown/图片树的轻量 revision，供前端轮询自动刷新。 */
+api.get('/workspace-state', requireUser, async (req, res) => {
+  const workspacePath = req.query.path;
+  if (!workspacePath) {
+    return res.status(400).json({ error: 'MISSING_PATH', message: '缺少 path 参数' });
+  }
+  const requestLifetime = abortWhenResponseCloses(req, res);
+  try {
+    res.json(await fileAccess.getWorkspaceState(
+      req.uid,
+      String(workspacePath),
+      { signal: requestLifetime.signal },
+    ));
+  } catch (err) {
+    if (err.name === 'AbortError' && requestLifetime.signal.aborted) return;
+    res.status(err.status || 500).json({
+      error: err.reason || 'WORKSPACE_STATE_FAILED',
+      message: err.message,
+    });
+  } finally {
+    requestLifetime.cleanup();
   }
 });
 
@@ -155,7 +270,10 @@ function shutdown(signal) {
   if (SOCKET_PATH) fs.rmSync(SOCKET_PATH, { force: true });
   process.exit(0);
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+if (require.main === module) {
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  start();
+}
 
-start();
+module.exports = { app, start };
