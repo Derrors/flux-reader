@@ -16,6 +16,7 @@ npm run build:macos
 
 `build:macos` 使用相对资源路径输出到忽略提交的 `dist-macos/`。Xcode 构建会把该目录
 嵌入 App Bundle，再由受限的 `flux-reader://app/` scheme 加载；页面自身的 CSP 禁止
-远程连接与脚本。Markdown 相对图片由 macOS bridge 改写为带文稿令牌的
-`flux-reader-resource://` URL，再由原生端仅从当前授权工作区读取；fnOS 未提供该
-resolver，因此不会意外暴露服务器本地路径。
+远程连接与脚本。Markdown 相对图片由平台 resolver 接管：macOS bridge 将其改写为
+带文稿令牌的 `flux-reader-resource://` URL；fnOS 则生成绑定当前文稿与可选工作区的
+同源 `/api/resource` URL。两端最终都只从已授权资源根读取安全位图，不把服务器本地
+路径直接交给 Web 渲染器。
