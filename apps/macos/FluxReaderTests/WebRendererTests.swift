@@ -54,8 +54,8 @@ final class WebRendererTests: XCTestCase {
       rootURL: rendererURL.deletingLastPathComponent()
     )
     XCTAssertEqual(
-      schemeHandler.resourceURL(for: WebMarkdownView.rendererEntryURL),
-      rendererURL
+      schemeHandler.resourceURL(for: WebMarkdownView.rendererEntryURL)?.resolvingSymlinksInPath(),
+      rendererURL.resolvingSymlinksInPath()
     )
     XCTAssertNil(
       schemeHandler.resourceURL(
