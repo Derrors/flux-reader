@@ -23,8 +23,9 @@ final class FluxReaderUITests: XCTestCase {
       "# UI Smoke\n\nRendered from XCUITest."
     app.launch()
 
-    XCTAssertTrue(app.staticTexts["flux.current-document"].waitForExistence(timeout: 8))
-    XCTAssertEqual(app.staticTexts["flux.current-document"].label, "FluxReaderUITest.md")
+    let currentDocument = app.staticTexts["flux.current-document"]
+    XCTAssertTrue(currentDocument.waitForExistence(timeout: 8))
+    XCTAssertEqual(currentDocument.value as? String, "FluxReaderUITest.md")
     XCTAssertTrue(app.staticTexts["UI Smoke"].waitForExistence(timeout: 12))
   }
 }
