@@ -1,16 +1,25 @@
 {
-  "name": "flux-reader-workspace",
+  "name": "flux-reader-monorepo",
   "private": true,
-  "version": "0.1.17",
-  "description": "飞牛 fnOS 上的 Markdown 阅读器，渲染效果对齐 Bits Flux",
+  "description": "Flux Reader 多平台 Markdown 阅读器 monorepo",
   "scripts": {
-    "install:all": "npm --prefix backend install && npm --prefix frontend install",
-    "dev:backend": "npm --prefix backend run dev",
-    "dev:frontend": "npm --prefix frontend run dev",
-    "test": "npm --prefix backend test && npm --prefix frontend test",
-    "test:frontend": "npm --prefix frontend test",
-    "build": "node scripts/build-combined.js",
-    "pack": "npm run build && cd flux-reader && fnpack build"
+    "install:all": "npm run install:fnos && npm run install:reader",
+    "install:fnos": "npm --prefix apps/fnos/backend install",
+    "install:reader": "npm --prefix packages/reader-web install",
+    "dev": "npm run dev:fnos",
+    "dev:fnos": "npm --prefix packages/reader-web run dev",
+    "dev:backend": "npm --prefix apps/fnos/backend run dev",
+    "dev:reader": "npm --prefix packages/reader-web run dev",
+    "dev:frontend": "npm run dev:reader",
+    "test": "npm run test:fnos && npm run test:reader",
+    "test:fnos": "npm --prefix apps/fnos/backend test",
+    "test:reader": "npm --prefix packages/reader-web test",
+    "test:frontend": "npm run test:reader",
+    "build": "npm run build:fnos",
+    "build:reader": "npm --prefix packages/reader-web run build",
+    "build:fnos": "node scripts/build-fnos.js",
+    "pack": "npm run pack:fnos",
+    "pack:fnos": "npm run build:fnos && cd apps/fnos/package && fnpack build"
   },
   "engines": {
     "node": ">=20.19.0"

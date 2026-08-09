@@ -22,7 +22,16 @@ function backendPlugin() {
     name: 'flux-reader-backend',
     apply: 'serve',
     configureServer(server) {
-      const entry = resolve(__dirname, '..', 'backend', 'src', 'server.js');
+      const entry = resolve(
+        __dirname,
+        '..',
+        '..',
+        'apps',
+        'fnos',
+        'backend',
+        'src',
+        'server.js',
+      );
       child = spawn(process.execPath, [entry], {
         env: { ...process.env, PORT: String(BACKEND_PORT) },
         stdio: 'inherit',

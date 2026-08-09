@@ -1,0 +1,65 @@
+name: fnOS CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/fnos/**"
+      - "packages/reader-web/**"
+      - "scripts/build-fnos.js"
+      - "package.json"
+      - ".github/workflows/fnos.yml"
+  pull_request:
+    paths:
+      - "apps/fnos/**"
+      - "packages/reader-web/**"
+      - "scripts/build-fnos.js"
+      - "package.json"
+      - ".github/workflows/fnos.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fnos-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: Test and build (Node.js 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      CI: "true"
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+      NPM_CONFIG_REPLACE_REGISTRY_HOST: always
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/fnos/backend/package-lock.json
+            packages/reader-web/package-lock.json
+
+      - name: Install fnOS backend dependencies
+        run: npm ci --prefix apps/fnos/backend --no-audit --no-fund
+
+      - name: Install shared reader dependencies
+        run: npm ci --prefix packages/reader-web --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build fnOS production app
+        run: npm run build:fnos

@@ -1,8 +1,15 @@
 # flux-reader
 
-飞牛 fnOS 上的 Markdown 阅读器。支持 GFM 表格、代码高亮、数学公式与 Mermaid 图表，
-默认浅色并可手动切换主题。用户既可以直接选择一个 Markdown 文件阅读，也可以
-点击「打开文件夹」浏览应用设置中已授权目录下的 `.md` 文件。
+Flux Reader 是一个多平台 Markdown 阅读器 monorepo。共享阅读器支持 GFM 表格、
+代码高亮、数学公式与 Mermaid 图表，默认浅色并可手动切换主题。
+
+| 平台 | 状态 | 实现 |
+|---|---|---|
+| fnOS | 可用 | React 阅读器 + Express 服务 + fnOS 统一网关 |
+| macOS | 规划中 | SwiftUI / AppKit 原生外壳 + 系统 WKWebView |
+
+当前可运行版本为 fnOS 应用：用户可以直接选择 Markdown 文件阅读，也可以点击
+「打开文件夹」浏览应用设置中已授权目录下的 `.md` 文件。
 
 ## 技术选型
 
@@ -19,41 +26,42 @@
 图表渲染需要写 rehype 插件。marked + html-react-parser 可以直接在 React 层
 替换节点，扩展成本更低。
 
-## 目录结构
+## Monorepo 结构
 
 ```
 flux-reader/
-├── backend/                    Express 服务
-│   └── src/
-│       ├── server.js           端口/Socket 双模式监听
-│       ├── trim-api.js         fnOS 开放 API 客户端（Unix Socket）
-│       ├── file-access.js      双层权限检查 + 防目录穿越
-│       └── sample.md           渲染验收文档（边界用例集）
-├── frontend/                   Vite + React
-│   ├── src/markdown/           渲染核心
-│   │   ├── pipeline.js         marked + KaTeX + 净化
-│   │   ├── preprocess.js       setext 修复、frontmatter 转表格
-│   │   ├── highlight.js        shiki 调度（Worker + 超时降级）
-│   │   ├── shiki.worker.js     后台高亮
-│   │   ├── MarkdownView.jsx    HTML → React、代码块替换、图片编组
-│   │   ├── CodeBlock.jsx       代码块（先纯文本，高亮后回填）
-│   │   └── Mermaid.jsx         图表（双主题 + 导出 SVG）
-│   └── src/components/         FileTree、Toc
-├── flux-reader/                fnOS 应用包
-│   ├── manifest                micro_app=true、统一网关
-│   ├── config/privilege        专用应用用户（最小权限）
-│   ├── config/resource         api-scope 声明
-│   └── cmd/main                生命周期脚本（status 未运行返回 3）
-└── scripts/build-combined.js   合并前后端产物
+├── apps/
+│   ├── fnos/
+│   │   ├── backend/                    Express 服务
+│   │   │   └── src/
+│   │   │       ├── server.js           端口/Socket 双模式监听
+│   │   │       ├── trim-api.js         fnOS 开放 API 客户端
+│   │   │       ├── file-access.js      双层权限检查 + 防目录穿越
+│   │   │       └── sample.md           渲染验收文档
+│   │   └── package/                    fnOS 应用包
+│   │       ├── manifest                应用元数据与统一网关配置
+│   │       ├── config/                 权限与 API scope
+│   │       └── cmd/main                生命周期脚本
+│   └── macos/                          原生 macOS 客户端目录
+├── packages/
+│   └── reader-web/                     Vite + React 共享阅读器
+│       └── src/
+│           ├── markdown/               渲染核心
+│           └── components/             FileTree、Toc
+└── scripts/build-fnos.js               合并 fnOS 前后端产物
 ```
+
+这是一个 Node.js + Swift 的多语言 monorepo。Node 子项目分别保留 lockfile，根目录
+脚本负责统一调度；这样既能共享阅读器，又不会破坏 fnOS 独立安装生产依赖的流程。
 
 ## 本地开发
 
 ```bash
-npm run install:all      # 装前后端依赖
+npm run install:all      # 安装 fnOS 后端与共享阅读器依赖
 
-npm run dev:backend      # 后端 :5178
-npm run dev:frontend     # 前端 :5177（代理 API 到后端）
+npm run dev              # 共享阅读器 :5177，并自动拉起 fnOS 后端 :5178
+npm run dev:backend      # 仅启动 fnOS 后端
+npm run dev:reader       # 启动共享阅读器（兼容命令：dev:frontend）
 ```
 
 访问 http://127.0.0.1:5177/app/flux-reader/
@@ -68,12 +76,14 @@ npm run dev:frontend     # 前端 :5177（代理 API 到后端）
 
 ```bash
 npm test                         # 后端安全测试 + 前端回归测试
-npm run test:frontend            # 仅运行前端测试
-npm --prefix frontend run test:watch  # 前端监听模式
+npm run test:fnos                # 仅运行 fnOS 后端测试
+npm run test:reader              # 仅运行共享阅读器测试
+npm --prefix packages/reader-web run test:watch  # 阅读器监听模式
 ```
 
-GitHub Actions 会在提交到 `main`、创建或更新 Pull Request，以及手动触发时，
-使用 Node.js 22 安装锁定依赖，依次执行 `npm test` 和生产构建。
+fnOS GitHub Actions 会在相关平台或共享阅读器路径发生变化时，使用 Node.js 22
+安装锁定依赖，依次执行 `npm test` 和 fnOS 生产构建。macOS 工程建立后将拥有独立
+工作流；修改 `packages/reader-web` 时两个平台的工作流都应运行。
 
 前端测试使用 Vitest、jsdom 与 Testing Library，覆盖文件/文件夹选择、取消与
 失败保留状态、文件关联启动、403 回程重试、latest-wins 竞态、空文件、API URL
@@ -84,8 +94,8 @@ GitHub Actions 会在提交到 `main`、创建或更新 Pull Request，以及手
 
 ```bash
 npm run install:all                  # 先装依赖（构建依赖它）
-npm run build                        # 构建并合并产物到 flux-reader/app
-cd flux-reader && fnpack build       # 生成 .fpk
+npm run build:fnos                   # 合并到 apps/fnos/package/app
+npm run pack:fnos                    # 构建并调用 fnpack 生成 .fpk
 ```
 
 然后在 fnOS 应用中心离线安装 `.fpk`。
@@ -109,11 +119,12 @@ npm run install:all --registry=https://registry.npmjs.org
 注意：lock 中 `resolved` 写的域名不决定能否安装 —— npm 会用本地配置的
 registry 替换域名，只保留包名与版本号。因此关键是「版本号在你用的源上是否存在」。
 
-**产物位置** —— 构建输出到 `flux-reader/app/`，而非 `flux-reader/target/`。
+**产物位置** —— 构建输出到 `apps/fnos/package/app/`，而非
+`apps/fnos/package/target/`。
 fnpack 只把应用包的 `app/` 压成 `app.tgz`，安装后展开为 `/var/apps/{appname}/target/`；
 放到 `target/` 不会被收进 `.fpk`（表现为 fpk 体积异常小、装上去起不来）。
 
-## 架构要点
+## fnOS 架构要点
 
 ### 访问模型：统一网关
 
@@ -158,7 +169,7 @@ NAS 硬件通常较弱，做了几处降级：
 
 ## 验收
 
-`backend/src/sample.md` 是一份刻意塞满边界情况的验收文档，覆盖：
+`apps/fnos/backend/src/sample.md` 是一份刻意塞满边界情况的验收文档，覆盖：
 frontmatter、setext 陷阱、宽表格、任务列表、各语言代码块、超长行、
 行内/块级公式、`$100` 误判、错误公式与错误图表降级、XSS 攻击载荷、
 多图编组、多级标题 TOC。
@@ -170,6 +181,7 @@ checkbox 保留但强制只读、其他 `input` 类型一律移除。
 
 ## 已知限制
 
+- macOS 客户端目前只有目录与架构边界，尚未建立 Xcode 工程。
 - 已在当前 fnOS 环境完成安装与核心流程验证；其他 fnOS / 飞牛 App 版本仍建议
   安装后做一次文件选择器与用户 ACL 冒烟测试。
 - mermaid 分包约 3.4 MB（gzip 936 KB），首次打开含图表的文档会有加载等待。

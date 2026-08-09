@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 构建脚本：把前端产物与后端服务合并进应用包的 app/ 目录。
+ * fnOS 构建脚本：把共享阅读器产物与 fnOS 后端合并进应用包的 app/ 目录。
  *
  * 关于输出位置：fnpack 打包时会把应用包的 `app/` 目录整体压成 app.tgz，
  * 安装到 fnOS 后展开为 `/var/apps/{appname}/target/`。也就是说
@@ -17,7 +17,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const APP_PKG_DIR = path.join(ROOT, 'flux-reader');
+const FNOS_DIR = path.join(ROOT, 'apps', 'fnos');
+const BACKEND_DIR = path.join(FNOS_DIR, 'backend');
+const READER_DIR = path.join(ROOT, 'packages', 'reader-web');
+const APP_PKG_DIR = path.join(FNOS_DIR, 'package');
 const APP_DIR = path.join(APP_PKG_DIR, 'app');
 const SERVER_OUT = path.join(APP_DIR, 'server');
 const PUBLIC_OUT = path.join(SERVER_OUT, 'public');
@@ -35,24 +38,27 @@ function run(cmd, cwd) {
  */
 function checkDeps() {
   const missing = [];
-  for (const pkg of ['backend', 'frontend']) {
-    if (!fs.existsSync(path.join(ROOT, pkg, 'node_modules'))) {
-      missing.push(pkg);
+  for (const [name, dir] of [
+    ['apps/fnos/backend', BACKEND_DIR],
+    ['packages/reader-web', READER_DIR],
+  ]) {
+    if (!fs.existsSync(path.join(dir, 'node_modules'))) {
+      missing.push(name);
     }
   }
-  // frontend 装了但 vite 不在（典型情况：上次 install 中途失败）
-  const viteBin = path.join(ROOT, 'frontend', 'node_modules', '.bin', 'vite');
-  const frontendIncomplete =
-    !missing.includes('frontend') && !fs.existsSync(viteBin);
+  // reader-web 装了但 vite 不在（典型情况：上次 install 中途失败）
+  const viteBin = path.join(READER_DIR, 'node_modules', '.bin', 'vite');
+  const readerIncomplete =
+    !missing.includes('packages/reader-web') && !fs.existsSync(viteBin);
 
-  if (missing.length === 0 && !frontendIncomplete) return;
+  if (missing.length === 0 && !readerIncomplete) return;
 
   console.error('\n✗ 依赖未就绪，无法构建\n');
   if (missing.length) {
     console.error(`  未安装依赖的目录：${missing.join('、')}`);
   }
-  if (frontendIncomplete) {
-    console.error('  frontend/node_modules 存在但缺少 vite，上次安装可能中断');
+  if (readerIncomplete) {
+    console.error('  packages/reader-web/node_modules 存在但缺少 vite，上次安装可能中断');
   }
   console.error('\n  请先运行：\n');
   console.error('    npm run install:all\n');
@@ -68,13 +74,13 @@ function main() {
   fs.rmSync(SERVER_OUT, { recursive: true, force: true });
   fs.mkdirSync(PUBLIC_OUT, { recursive: true });
 
-  // 2. 构建前端
-  run('npm run build', path.join(ROOT, 'frontend'));
-  fs.cpSync(path.join(ROOT, 'frontend', 'dist'), PUBLIC_OUT, { recursive: true });
+  // 2. 构建共享阅读器
+  run('npm run build', READER_DIR);
+  fs.cpSync(path.join(READER_DIR, 'dist'), PUBLIC_OUT, { recursive: true });
 
   // 3. 复制后端源码
   for (const entry of ['src', 'package.json', 'package-lock.json']) {
-    const from = path.join(ROOT, 'backend', entry);
+    const from = path.join(BACKEND_DIR, entry);
     if (fs.existsSync(from)) {
       fs.cpSync(from, path.join(SERVER_OUT, entry), { recursive: true });
     }
@@ -84,7 +90,7 @@ function main() {
   run('npm install --omit=dev --no-audit --no-fund', SERVER_OUT);
 
   console.log(`\n✅ 构建完成：${path.relative(ROOT, APP_DIR)}`);
-  console.log('   下一步：cd flux-reader && fnpack build');
+  console.log('   下一步：cd apps/fnos/package && fnpack build');
 }
 
 main();
