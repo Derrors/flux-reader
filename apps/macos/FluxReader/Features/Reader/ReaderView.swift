@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -10,12 +11,67 @@ struct ReaderView: View {
       sidebar
     } detail: {
       detail
-        .navigationTitle(viewModel.currentDocument?.displayName ?? "Flux Reader")
+        .navigationTitle(navigationTitle)
     }
     .navigationSplitViewStyle(.balanced)
     .frame(minWidth: 860, minHeight: 580)
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
+        if viewModel.currentDocument != nil {
+          Button {
+            viewModel.toggleEditing()
+          } label: {
+            Label(
+              viewModel.isEditing ? "预览" : "编辑",
+              systemImage: viewModel.isEditing ? "eye" : "pencil"
+            )
+          }
+          .help(viewModel.isEditing ? "预览当前草稿" : "编辑当前文稿")
+          .accessibilityIdentifier("flux.edit")
+
+          if viewModel.hasUnsavedChanges {
+            Text("未保存")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .accessibilityIdentifier("flux.dirty-indicator")
+          }
+
+          Button {
+            viewModel.save()
+          } label: {
+            if viewModel.isSaving {
+              ProgressView()
+                .controlSize(.small)
+            } else {
+              Label("保存", systemImage: "square.and.arrow.down")
+            }
+          }
+          .help("保存当前文稿")
+          .disabled(!viewModel.canSave)
+          .accessibilityIdentifier("flux.save")
+
+          Menu {
+            Button("另存为…") {
+              viewModel.requestSaveAs()
+            }
+            .disabled(!viewModel.canSaveAs)
+
+            Button("还原到已保存版本", role: .destructive) {
+              viewModel.revertDraft()
+            }
+            .disabled(!viewModel.hasUnsavedChanges || viewModel.isSaving)
+
+            Button("从磁盘重新载入…") {
+              viewModel.reloadFromDisk()
+            }
+            .disabled(viewModel.isSaving)
+          } label: {
+            Label("文稿操作", systemImage: "ellipsis.circle")
+          }
+          .help("另存为或还原文稿")
+          .accessibilityIdentifier("flux.document-actions")
+        }
+
         Menu {
           Picker("外观", selection: $appearance) {
             ForEach(AppAppearance.allCases) { option in
@@ -68,10 +124,52 @@ struct ReaderView: View {
     .task {
       viewModel.restoreLibraryIfNeeded()
     }
+    .onChange(of: viewModel.saveAsRequestID) { _, _ in
+      presentSavePanel()
+    }
+    .confirmationDialog(
+      "当前文稿有未保存的更改",
+      isPresented: $viewModel.isUnsavedChangesConfirmationPresented,
+      titleVisibility: .visible
+    ) {
+      Button("保存并打开") {
+        viewModel.saveAndOpenPendingDocument()
+      }
+      Button("不保存并打开", role: .destructive) {
+        viewModel.discardChangesAndOpenPendingDocument()
+      }
+      Button("取消", role: .cancel) {
+        viewModel.cancelPendingDocumentOpen()
+      }
+    } message: {
+      Text("你可以先保存当前更改，或放弃更改后继续打开其他文稿。")
+    }
+    .alert("无法完成文稿操作", isPresented: saveErrorBinding) {
+      Button("好") {
+        viewModel.dismissSaveError()
+      }
+    } message: {
+      Text(viewModel.saveErrorMessage ?? "未知错误")
+    }
     .searchable(
       text: $viewModel.searchQuery,
       placement: .sidebar,
       prompt: "搜索文件名和正文"
+    )
+  }
+
+  private var navigationTitle: String {
+    guard let document = viewModel.currentDocument else { return "Flux Reader" }
+    return viewModel.hasUnsavedChanges
+      ? "\(document.displayName) — 已修改" : document.displayName
+  }
+
+  private var saveErrorBinding: Binding<Bool> {
+    Binding(
+      get: { viewModel.saveErrorMessage != nil },
+      set: { isPresented in
+        if !isPresented { viewModel.dismissSaveError() }
+      }
     )
   }
 
@@ -302,7 +400,17 @@ struct ReaderView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     case .loaded(let document):
-      MarkdownRendererView(document: document)
+      if viewModel.isEditing {
+        MarkdownEditorView(
+          content: $viewModel.draftContent,
+          document: document,
+          hasUnsavedChanges: viewModel.hasUnsavedChanges,
+          isSaving: viewModel.isSaving,
+          statusMessage: viewModel.saveStatusMessage
+        )
+      } else if let previewDocument = viewModel.previewDocument {
+        MarkdownRendererView(document: previewDocument)
+      }
     case .failure(let message):
       VStack(spacing: 16) {
         Image(systemName: "exclamationmark.triangle")
@@ -351,5 +459,85 @@ struct ReaderView: View {
     }
     .padding(32)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private func presentSavePanel() {
+    guard let document = viewModel.currentDocument else { return }
+    let sourceDocumentURL = document.url.standardizedFileURL
+
+    let panel = NSSavePanel()
+    panel.title = "另存 Markdown 文稿"
+    panel.prompt = "保存"
+    panel.nameFieldStringValue = document.displayName
+    panel.directoryURL = document.url.deletingLastPathComponent()
+    panel.allowedContentTypes = MarkdownContentType.allowedContentTypes
+    panel.allowsOtherFileTypes = false
+    panel.canCreateDirectories = true
+    panel.isExtensionHidden = false
+    panel.begin { response in
+      guard response == .OK, let url = panel.url else { return }
+      viewModel.saveAs(to: url, for: sourceDocumentURL)
+    }
+  }
+}
+
+private struct MarkdownEditorView: View {
+  @Binding var content: String
+
+  let document: MarkdownDocument
+  let hasUnsavedChanges: Bool
+  let isSaving: Bool
+  let statusMessage: String?
+
+  @FocusState private var editorIsFocused: Bool
+
+  var body: some View {
+    VStack(spacing: 0) {
+      TextEditor(text: $content)
+        .font(.system(.body, design: .monospaced))
+        .lineSpacing(3)
+        .padding(12)
+        .textEditorStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Color(nsColor: .textBackgroundColor))
+        .focused($editorIsFocused)
+        .accessibilityLabel("Markdown 编辑器")
+        .accessibilityIdentifier("flux.editor")
+
+      Divider()
+
+      HStack(spacing: 12) {
+        Text(document.url.path(percentEncoded: false))
+          .lineLimit(1)
+          .truncationMode(.middle)
+
+        Spacer()
+
+        if isSaving {
+          Label("正在保存…", systemImage: "arrow.triangle.2.circlepath")
+        } else if hasUnsavedChanges {
+          Label("未保存", systemImage: "circle.fill")
+            .accessibilityIdentifier("flux.editor-dirty-status")
+        } else if let statusMessage {
+          Label(statusMessage, systemImage: "checkmark.circle")
+            .accessibilityIdentifier("flux.save-status")
+        }
+
+        Text(
+          ByteCountFormatter.string(
+            fromByteCount: Int64(content.utf8.count),
+            countStyle: .file
+          )
+        )
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 7)
+      .background(.bar)
+    }
+    .onAppear {
+      editorIsFocused = true
+    }
   }
 }

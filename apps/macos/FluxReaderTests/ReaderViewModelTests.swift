@@ -77,6 +77,10 @@ final class ReaderViewModelTests: XCTestCase {
     await waitUntil { viewModel.currentDocument != nil }
 
     XCTAssertEqual(viewModel.currentDocument?.content, "# Guide")
+    XCTAssertEqual(viewModel.draftContent, "# Guide")
+    XCTAssertEqual(viewModel.previewDocument?.content, "# Guide")
+    XCTAssertFalse(viewModel.hasUnsavedChanges)
+    XCTAssertFalse(viewModel.isEditing)
     XCTAssertEqual(store.recordedDocumentURLs, [markdownURL.standardizedFileURL])
     XCTAssertEqual(viewModel.recentDocuments.map(\.url), [markdownURL.standardizedFileURL])
   }
@@ -128,6 +132,362 @@ final class ReaderViewModelTests: XCTestCase {
     viewModel.presentFileImporter()
     XCTAssertEqual(viewModel.importerRequest, .document)
     XCTAssertTrue(viewModel.isImporterPresented)
+  }
+
+  @MainActor
+  func testEditingAndSavingUpdatesFileAndDocumentModel() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    try Data("# Original".utf8).write(to: markdownURL)
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher()
+    )
+
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+
+    let updatedContent = "# Updated\n\n已保存的 Markdown"
+    viewModel.toggleEditing()
+    viewModel.draftContent = updatedContent
+
+    XCTAssertTrue(viewModel.isEditing)
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.canSave)
+    XCTAssertEqual(viewModel.previewDocument?.content, updatedContent)
+
+    viewModel.save()
+    await waitUntil {
+      !viewModel.isSaving && viewModel.currentDocument?.content == updatedContent
+    }
+
+    XCTAssertEqual(
+      String(decoding: try Data(contentsOf: markdownURL), as: UTF8.self),
+      updatedContent
+    )
+    XCTAssertEqual(viewModel.currentDocument?.byteCount, Data(updatedContent.utf8).count)
+    XCTAssertEqual(viewModel.draftContent, updatedContent)
+    XCTAssertFalse(viewModel.hasUnsavedChanges)
+    XCTAssertFalse(viewModel.canSave)
+    XCTAssertTrue(viewModel.isEditing)
+    XCTAssertEqual(viewModel.saveStatusMessage, "已保存")
+    XCTAssertNil(viewModel.saveErrorMessage)
+  }
+
+  @MainActor
+  func testImporterFailureKeepsCurrentDirtyDraftAccessible() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    try Data("# Original".utf8).write(to: markdownURL)
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher()
+    )
+
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+    viewModel.toggleEditing()
+    viewModel.draftContent = "# Unsaved draft"
+
+    viewModel.handleImporterResult(
+      .failure(CocoaError(.fileReadNoPermission))
+    )
+
+    XCTAssertEqual(viewModel.currentDocument?.url, markdownURL.standardizedFileURL)
+    XCTAssertEqual(viewModel.currentDocument?.content, "# Original")
+    XCTAssertEqual(viewModel.draftContent, "# Unsaved draft")
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.isEditing)
+    XCTAssertNotNil(viewModel.saveErrorMessage)
+  }
+
+  @MainActor
+  func testExternalModificationConflictKeepsDirtyDraftAndReportsError() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    let originalContent = "# Original"
+    let originalModificationDate = Date(timeIntervalSince1970: 1_700_000_000)
+    try Data(originalContent.utf8).write(to: markdownURL)
+    try FileManager.default.setAttributes(
+      [.modificationDate: originalModificationDate],
+      ofItemAtPath: markdownURL.path(percentEncoded: false)
+    )
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher()
+    )
+
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+
+    let draft = "# My unsaved draft"
+    let externalContent = "# Changed elsewhere"
+    viewModel.toggleEditing()
+    viewModel.draftContent = draft
+    try Data(externalContent.utf8).write(to: markdownURL)
+    try FileManager.default.setAttributes(
+      [.modificationDate: originalModificationDate.addingTimeInterval(60)],
+      ofItemAtPath: markdownURL.path(percentEncoded: false)
+    )
+
+    viewModel.save()
+    await waitUntil {
+      !viewModel.isSaving && viewModel.saveErrorMessage != nil
+    }
+
+    XCTAssertEqual(
+      String(decoding: try Data(contentsOf: markdownURL), as: UTF8.self),
+      externalContent
+    )
+    XCTAssertEqual(viewModel.currentDocument?.content, originalContent)
+    XCTAssertEqual(viewModel.draftContent, draft)
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.isEditing)
+    XCTAssertNil(viewModel.saveStatusMessage)
+    XCTAssertEqual(
+      viewModel.saveErrorMessage,
+      FileAccessError.fileModifiedExternally.localizedDescription
+    )
+
+    viewModel.dismissSaveError()
+    viewModel.reloadFromDisk()
+    XCTAssertTrue(viewModel.isUnsavedChangesConfirmationPresented)
+    viewModel.discardChangesAndOpenPendingDocument()
+    await waitUntil { viewModel.currentDocument?.content == externalContent }
+
+    XCTAssertEqual(viewModel.draftContent, externalContent)
+    XCTAssertFalse(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.isEditing)
+  }
+
+  @MainActor
+  func testWatcherRefreshDoesNotOverwriteDirtyDraft() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    let originalContent = "# Original"
+    let externalContent = "# Changed elsewhere"
+    let draft = "# Unsaved draft"
+    try Data(originalContent.utf8).write(to: markdownURL)
+    let store = InMemoryBookmarkStore()
+    store.workspaceURLs = [temporaryDirectory]
+    let watcher = TestWorkspaceWatcher()
+    let folderService = CountingFolderIndexService()
+    let viewModel = ReaderViewModel(
+      folderService: folderService,
+      bookmarkStore: store,
+      workspaceWatcher: watcher
+    )
+
+    viewModel.restoreLibraryIfNeeded()
+    await waitUntil { viewModel.workspaces.count == 1 }
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+    viewModel.toggleEditing()
+    viewModel.draftContent = draft
+
+    try Data(externalContent.utf8).write(to: markdownURL)
+    watcher.fire()
+    await waitUntil(timeoutIterations: 300) {
+      folderService.callCount >= 2 && !viewModel.isWorkspaceLoading
+    }
+
+    XCTAssertEqual(viewModel.currentDocument?.content, originalContent)
+    XCTAssertEqual(viewModel.draftContent, draft)
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.isEditing)
+  }
+
+  @MainActor
+  func testWatcherRefreshAfterSaveKeepsEditorActive() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    try Data("# Original".utf8).write(to: markdownURL)
+    let store = InMemoryBookmarkStore()
+    store.workspaceURLs = [temporaryDirectory]
+    let watcher = TestWorkspaceWatcher()
+    let folderService = CountingFolderIndexService()
+    let viewModel = ReaderViewModel(
+      folderService: folderService,
+      bookmarkStore: store,
+      workspaceWatcher: watcher
+    )
+
+    viewModel.restoreLibraryIfNeeded()
+    await waitUntil { viewModel.workspaces.count == 1 }
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+    viewModel.toggleEditing()
+    viewModel.draftContent = "# Saved"
+    viewModel.save()
+    await waitUntil { !viewModel.isSaving && !viewModel.hasUnsavedChanges }
+
+    watcher.fire()
+    await waitUntil(timeoutIterations: 300) {
+      folderService.callCount >= 2 && !viewModel.isWorkspaceLoading
+    }
+    try await Task.sleep(for: .milliseconds(100))
+
+    XCTAssertEqual(viewModel.currentDocument?.content, "# Saved")
+    XCTAssertTrue(viewModel.isEditing)
+  }
+
+  @MainActor
+  func testCancelAndDiscardWhenOpeningAnotherDocumentWithUnsavedChanges() async throws {
+    let firstURL = temporaryDirectory.appendingPathComponent("first.md")
+    let secondURL = temporaryDirectory.appendingPathComponent("second.md")
+    try Data("# First".utf8).write(to: firstURL)
+    try Data("# Second".utf8).write(to: secondURL)
+    let store = InMemoryBookmarkStore()
+    let viewModel = ReaderViewModel(
+      bookmarkStore: store,
+      workspaceWatcher: TestWorkspaceWatcher()
+    )
+
+    viewModel.open(firstURL)
+    await waitUntil { viewModel.currentDocument?.url == firstURL.standardizedFileURL }
+    viewModel.toggleEditing()
+    viewModel.draftContent = "# First draft"
+
+    viewModel.open(secondURL)
+
+    XCTAssertTrue(viewModel.isUnsavedChangesConfirmationPresented)
+    XCTAssertEqual(viewModel.currentDocument?.url, firstURL.standardizedFileURL)
+    XCTAssertEqual(store.recordedDocumentURLs, [firstURL.standardizedFileURL])
+
+    viewModel.cancelPendingDocumentOpen()
+
+    XCTAssertFalse(viewModel.isUnsavedChangesConfirmationPresented)
+    XCTAssertEqual(viewModel.currentDocument?.url, firstURL.standardizedFileURL)
+    XCTAssertEqual(viewModel.draftContent, "# First draft")
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.isEditing)
+    XCTAssertEqual(store.recordedDocumentURLs, [firstURL.standardizedFileURL])
+
+    viewModel.open(secondURL)
+    XCTAssertTrue(viewModel.isUnsavedChangesConfirmationPresented)
+    viewModel.discardChangesAndOpenPendingDocument()
+    await waitUntil { viewModel.currentDocument?.url == secondURL.standardizedFileURL }
+
+    XCTAssertFalse(viewModel.isUnsavedChangesConfirmationPresented)
+    XCTAssertEqual(viewModel.currentDocument?.content, "# Second")
+    XCTAssertEqual(viewModel.draftContent, "# Second")
+    XCTAssertFalse(viewModel.hasUnsavedChanges)
+    XCTAssertFalse(viewModel.isEditing)
+    XCTAssertEqual(
+      store.recordedDocumentURLs,
+      [firstURL.standardizedFileURL, secondURL.standardizedFileURL]
+    )
+  }
+
+  @MainActor
+  func testEditingDuringSaveDoesNotLoseDraftWhenAnotherDocumentIsRequested() async throws {
+    let firstURL = temporaryDirectory.appendingPathComponent("first.md")
+    let secondURL = temporaryDirectory.appendingPathComponent("second.md")
+    try Data("# First".utf8).write(to: firstURL)
+    try Data("# Second".utf8).write(to: secondURL)
+    let fileService = BlockingFileService()
+    let viewModel = ReaderViewModel(
+      fileService: fileService,
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher()
+    )
+
+    viewModel.open(firstURL)
+    await waitUntil { viewModel.currentDocument?.url == firstURL.standardizedFileURL }
+    viewModel.draftContent = "# Saved snapshot"
+    viewModel.save()
+    await waitUntil { fileService.saveStarted }
+
+    viewModel.draftContent = "# New draft"
+    viewModel.open(secondURL)
+    fileService.finishSave()
+    await waitUntil { !viewModel.isSaving }
+
+    XCTAssertEqual(viewModel.currentDocument?.url, firstURL.standardizedFileURL)
+    XCTAssertEqual(viewModel.currentDocument?.content, "# Saved snapshot")
+    XCTAssertEqual(viewModel.draftContent, "# New draft")
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.isUnsavedChangesConfirmationPresented)
+    XCTAssertEqual(
+      String(decoding: try Data(contentsOf: firstURL), as: UTF8.self),
+      "# Saved snapshot"
+    )
+
+    viewModel.cancelPendingDocumentOpen()
+  }
+
+  @MainActor
+  func testSaveAsDoesNotSaveAnotherDocumentSelectedWhilePanelWasOpen() async throws {
+    let firstURL = temporaryDirectory.appendingPathComponent("first.md")
+    let secondURL = temporaryDirectory.appendingPathComponent("second.md")
+    let destinationURL = temporaryDirectory.appendingPathComponent("saved.md")
+    try Data("# First".utf8).write(to: firstURL)
+    try Data("# Second".utf8).write(to: secondURL)
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher()
+    )
+
+    viewModel.open(firstURL)
+    await waitUntil { viewModel.currentDocument?.url == firstURL.standardizedFileURL }
+    let panelSourceURL = try XCTUnwrap(viewModel.currentDocument?.url)
+
+    viewModel.open(secondURL)
+    await waitUntil { viewModel.currentDocument?.url == secondURL.standardizedFileURL }
+    viewModel.draftContent = "# Second draft"
+    viewModel.saveAs(to: destinationURL, for: panelSourceURL)
+
+    XCTAssertFalse(FileManager.default.fileExists(atPath: destinationURL.path))
+    XCTAssertEqual(viewModel.currentDocument?.url, secondURL.standardizedFileURL)
+    XCTAssertEqual(viewModel.draftContent, "# Second draft")
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertNotNil(viewModel.saveErrorMessage)
+  }
+
+  @MainActor
+  func testSaveAsRejectsSameTimestampChangeToExistingDestination() async throws {
+    let sourceURL = temporaryDirectory.appendingPathComponent("source.md")
+    let destinationURL = temporaryDirectory.appendingPathComponent("destination.md")
+    let destinationModificationDate = Date(timeIntervalSince1970: 1_700_000_000)
+    let originalDestinationContent = "# Version A"
+    let externalDestinationContent = "# Version B"
+    XCTAssertEqual(
+      originalDestinationContent.utf8.count,
+      externalDestinationContent.utf8.count
+    )
+    try Data("# Source".utf8).write(to: sourceURL)
+    try Data(originalDestinationContent.utf8).write(to: destinationURL)
+    try FileManager.default.setAttributes(
+      [.modificationDate: destinationModificationDate],
+      ofItemAtPath: destinationURL.path
+    )
+    let fileService = BlockingFileService()
+    let viewModel = ReaderViewModel(
+      fileService: fileService,
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher()
+    )
+
+    viewModel.open(sourceURL)
+    await waitUntil { viewModel.currentDocument?.url == sourceURL.standardizedFileURL }
+    viewModel.draftContent = "# Local draft"
+    viewModel.saveAs(to: destinationURL, for: sourceURL)
+    await waitUntil { fileService.saveStarted }
+
+    try Data(externalDestinationContent.utf8).write(to: destinationURL)
+    try FileManager.default.setAttributes(
+      [.modificationDate: destinationModificationDate],
+      ofItemAtPath: destinationURL.path
+    )
+    fileService.finishSave()
+    await waitUntil { !viewModel.isSaving && viewModel.saveErrorMessage != nil }
+
+    XCTAssertEqual(
+      try String(contentsOf: destinationURL, encoding: .utf8),
+      externalDestinationContent
+    )
+    XCTAssertEqual(viewModel.currentDocument?.url, sourceURL.standardizedFileURL)
+    XCTAssertEqual(viewModel.draftContent, "# Local draft")
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertEqual(
+      viewModel.saveErrorMessage,
+      FileAccessError.fileModifiedExternally.localizedDescription
+    )
   }
 
   @MainActor
@@ -246,6 +606,24 @@ private final class SequencedFolderIndexService: FolderIndexing, @unchecked Send
   }
 }
 
+private final class CountingFolderIndexService: FolderIndexing, @unchecked Sendable {
+  private let lock = NSLock()
+  private var _callCount = 0
+
+  var callCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return _callCount
+  }
+
+  func indexFolder(at url: URL) throws -> WorkspaceSnapshot {
+    lock.lock()
+    _callCount += 1
+    lock.unlock()
+    return try LocalFolderIndexService().indexFolder(at: url)
+  }
+}
+
 private final class TestWorkspaceWatcher: WorkspaceWatching, @unchecked Sendable {
   private let lock = NSLock()
   private var callbacks: [@Sendable () -> Void] = []
@@ -272,6 +650,47 @@ private final class TestWorkspaceWatcher: WorkspaceWatching, @unchecked Sendable
 
 private final class TestWorkspaceWatchToken: WorkspaceWatchToken, @unchecked Sendable {
   func cancel() {}
+}
+
+private final class BlockingFileService: FileAccessing, @unchecked Sendable {
+  private let base = LocalFileService()
+  private let lock = NSLock()
+  private let saveGate = DispatchSemaphore(value: 0)
+  private var _saveStarted = false
+
+  var saveStarted: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return _saveStarted
+  }
+
+  func loadDocument(at url: URL) throws -> MarkdownDocument {
+    try base.loadDocument(at: url)
+  }
+
+  func saveDocument(
+    content: String,
+    to url: URL,
+    expectedModificationDate: Date?,
+    expectedContent: String?,
+    expectedTargetExists: Bool
+  ) throws -> MarkdownDocument {
+    lock.lock()
+    _saveStarted = true
+    lock.unlock()
+    saveGate.wait()
+    return try base.saveDocument(
+      content: content,
+      to: url,
+      expectedModificationDate: expectedModificationDate,
+      expectedContent: expectedContent,
+      expectedTargetExists: expectedTargetExists
+    )
+  }
+
+  func finishSave() {
+    saveGate.signal()
+  }
 }
 
 private final class InMemoryBookmarkStore: BookmarkStoring {

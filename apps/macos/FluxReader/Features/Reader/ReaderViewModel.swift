@@ -15,6 +15,19 @@ final class ReaderViewModel: ObservableObject {
     case folders
   }
 
+  private struct PendingDocumentOpen {
+    let url: URL
+    let recordsRecentDocument: Bool
+    let preferredResourceRootURL: URL?
+    let preservesEditingState: Bool
+  }
+
+  private struct SaveTargetSnapshot {
+    let exists: Bool
+    let modificationDate: Date?
+    let content: String?
+  }
+
   @Published private(set) var phase: Phase = .empty
   @Published private(set) var workspaces: [WorkspaceSnapshot] = []
   @Published private(set) var recentDocuments: [RecentDocument] = []
@@ -23,6 +36,19 @@ final class ReaderViewModel: ObservableObject {
   @Published private(set) var libraryMessage: String?
   @Published private(set) var searchResults: [WorkspaceSearchResult] = []
   @Published private(set) var isSearching = false
+  @Published var draftContent = "" {
+    didSet {
+      if draftContent != currentDocument?.content, saveStatusMessage != nil {
+        saveStatusMessage = nil
+      }
+    }
+  }
+  @Published private(set) var isEditing = false
+  @Published private(set) var isSaving = false
+  @Published private(set) var saveStatusMessage: String?
+  @Published private(set) var saveErrorMessage: String?
+  @Published var isUnsavedChangesConfirmationPresented = false
+  @Published private(set) var saveAsRequestID = 0
   @Published var searchQuery = "" {
     didSet { scheduleSearch() }
   }
@@ -35,6 +61,8 @@ final class ReaderViewModel: ObservableObject {
   private let workspaceWatcher: any WorkspaceWatching
   private let searchService: any WorkspaceSearching
   private var loadTask: Task<Void, Never>?
+  private var saveTask: Task<Void, Never>?
+  private var saveOperationID: UUID?
   private var searchTask: Task<Void, Never>?
   private var workspaceTasks: [URL: Task<Void, Never>] = [:]
   private var workspaceIndexTasks: [URL: Task<WorkspaceSnapshot, Error>] = [:]
@@ -44,6 +72,9 @@ final class ReaderViewModel: ObservableObject {
   private var workspaceAccesses: [URL: SecurityScopedAccess] = [:]
   private var workspaceWatchTokens: [URL: any WorkspaceWatchToken] = [:]
   private var autoRefreshTasks: [URL: Task<Void, Never>] = [:]
+  private var currentDocumentAccess: SecurityScopedAccess?
+  private var pendingDocumentOpen: PendingDocumentOpen?
+  private var opensPendingDocumentAfterSave = false
   private var didRestoreLibrary = false
 
   init(
@@ -63,6 +94,23 @@ final class ReaderViewModel: ObservableObject {
   var currentDocument: MarkdownDocument? {
     guard case .loaded(let document) = phase else { return nil }
     return document
+  }
+
+  var previewDocument: MarkdownDocument? {
+    currentDocument?.withContent(draftContent)
+  }
+
+  var hasUnsavedChanges: Bool {
+    guard let currentDocument else { return false }
+    return draftContent != currentDocument.content
+  }
+
+  var canSave: Bool {
+    currentDocument != nil && hasUnsavedChanges && !isSaving
+  }
+
+  var canSaveAs: Bool {
+    currentDocument != nil && !isSaving
   }
 
   var isWorkspaceLoading: Bool {
@@ -104,6 +152,104 @@ final class ReaderViewModel: ObservableObject {
     isImporterPresented = true
   }
 
+  func toggleEditing() {
+    guard currentDocument != nil else { return }
+    isEditing.toggle()
+  }
+
+  func save() {
+    guard let document = currentDocument, hasUnsavedChanges else { return }
+    performSave(
+      to: document.url,
+      expectedModificationDate: document.modificationDate,
+      expectedContent: document.content,
+      expectedTargetExists: true
+    )
+  }
+
+  func requestSaveAs() {
+    guard canSaveAs else { return }
+    saveAsRequestID += 1
+  }
+
+  func saveAs(to url: URL, for sourceDocumentURL: URL) {
+    guard
+      let document = currentDocument,
+      document.url.standardizedFileURL == sourceDocumentURL.standardizedFileURL
+    else {
+      saveErrorMessage = "另存为期间当前文稿已改变，请重新选择保存位置。"
+      return
+    }
+    let destinationURL = url.standardizedFileURL
+    let snapshot: SaveTargetSnapshot
+    do {
+      snapshot =
+        destinationURL == document.url.standardizedFileURL
+        ? SaveTargetSnapshot(
+          exists: true,
+          modificationDate: document.modificationDate,
+          content: document.content
+        )
+        : try snapshotSaveTarget(at: destinationURL)
+    } catch {
+      saveErrorMessage = error.localizedDescription
+      return
+    }
+    performSave(
+      to: url,
+      expectedModificationDate: snapshot.modificationDate,
+      expectedContent: snapshot.content,
+      expectedTargetExists: snapshot.exists
+    )
+  }
+
+  func revertDraft() {
+    guard let document = currentDocument else { return }
+    draftContent = document.content
+    saveStatusMessage = nil
+  }
+
+  func reloadFromDisk() {
+    guard let document = currentDocument else { return }
+    requestDocumentOpen(
+      at: document.url,
+      recordsRecentDocument: false,
+      preferredResourceRootURL: document.resourceRootURL,
+      allowsReloadingCurrentDocument: true,
+      preservesEditingState: true
+    )
+  }
+
+  func dismissSaveError() {
+    saveErrorMessage = nil
+  }
+
+  func saveAndOpenPendingDocument() {
+    guard pendingDocumentOpen != nil else {
+      isUnsavedChangesConfirmationPresented = false
+      return
+    }
+    isUnsavedChangesConfirmationPresented = false
+    guard hasUnsavedChanges else {
+      openPendingDocument()
+      return
+    }
+    opensPendingDocumentAfterSave = true
+    save()
+  }
+
+  func discardChangesAndOpenPendingDocument() {
+    isUnsavedChangesConfirmationPresented = false
+    opensPendingDocumentAfterSave = false
+    openPendingDocument()
+  }
+
+  func cancelPendingDocumentOpen() {
+    isUnsavedChangesConfirmationPresented = false
+    opensPendingDocumentAfterSave = false
+    pendingDocumentOpen = nil
+  }
+
   func handleImporterResult(_ result: Result<[URL], Error>) {
     let request = importerRequest
     isImporterPresented = false
@@ -123,11 +269,15 @@ final class ReaderViewModel: ObservableObject {
   }
 
   func open(_ url: URL) {
-    loadDocument(at: url, recordsRecentDocument: true)
+    requestDocumentOpen(
+      at: url,
+      recordsRecentDocument: true,
+      preferredResourceRootURL: nil
+    )
   }
 
   func openSearchResult(_ result: WorkspaceSearchResult) {
-    loadDocument(
+    requestDocumentOpen(
       at: result.documentURL,
       recordsRecentDocument: true,
       preferredResourceRootURL: result.workspaceRootURL
@@ -159,10 +309,18 @@ final class ReaderViewModel: ObservableObject {
   }
 
   func closeWorkspace(_ workspace: WorkspaceSnapshot) {
+    guard canCloseWorkspaceContainingCurrentDocument(workspace.rootURL) else { return }
     closeWorkspace(at: workspace.rootURL, removesBookmark: true)
   }
 
   func closeAllWorkspaces() {
+    if hasUnsavedChanges,
+      let document = currentDocument,
+      workspaces.contains(where: { Self.contains(document.url, in: $0.rootURL) })
+    {
+      saveErrorMessage = "当前文稿有未保存的更改，请先保存或还原后再关闭文件夹。"
+      return
+    }
     let rootURLs = workspaceOrder
     for rootURL in rootURLs {
       closeWorkspace(at: rootURL, removesBookmark: false)
@@ -198,14 +356,71 @@ final class ReaderViewModel: ObservableObject {
     case .failure(let error):
       let cocoaError = error as NSError
       guard cocoaError.code != NSUserCancelledError else { return }
-      phase = .failure(error.localizedDescription)
+      if currentDocument != nil {
+        saveErrorMessage = error.localizedDescription
+      } else {
+        phase = .failure(error.localizedDescription)
+      }
     }
+  }
+
+  private func requestDocumentOpen(
+    at url: URL,
+    recordsRecentDocument: Bool,
+    preferredResourceRootURL: URL?,
+    allowsReloadingCurrentDocument: Bool = false,
+    preservesEditingState: Bool = false
+  ) {
+    if !allowsReloadingCurrentDocument,
+      currentDocument?.url.standardizedFileURL == url.standardizedFileURL
+    {
+      return
+    }
+
+    let request = PendingDocumentOpen(
+      url: url,
+      recordsRecentDocument: recordsRecentDocument,
+      preferredResourceRootURL: preferredResourceRootURL,
+      preservesEditingState: preservesEditingState
+    )
+
+    if isSaving {
+      pendingDocumentOpen = request
+      opensPendingDocumentAfterSave = true
+      return
+    }
+
+    guard hasUnsavedChanges else {
+      loadDocument(
+        at: url,
+        recordsRecentDocument: recordsRecentDocument,
+        preferredResourceRootURL: preferredResourceRootURL,
+        preservesEditingState: preservesEditingState
+      )
+      return
+    }
+
+    pendingDocumentOpen = request
+    isUnsavedChangesConfirmationPresented = true
+  }
+
+  private func openPendingDocument() {
+    guard let request = pendingDocumentOpen else { return }
+    pendingDocumentOpen = nil
+    opensPendingDocumentAfterSave = false
+    loadDocument(
+      at: request.url,
+      recordsRecentDocument: request.recordsRecentDocument,
+      preferredResourceRootURL: request.preferredResourceRootURL,
+      preservesEditingState: request.preservesEditingState
+    )
   }
 
   private func loadDocument(
     at url: URL,
     recordsRecentDocument: Bool,
-    preferredResourceRootURL: URL? = nil
+    preferredResourceRootURL: URL? = nil,
+    preservesEditingState: Bool = false
   ) {
     guard MarkdownDocument.supports(url) else {
       phase = .failure(
@@ -214,26 +429,189 @@ final class ReaderViewModel: ObservableObject {
       return
     }
 
-    if recordsRecentDocument {
-      recordRecentDocument(url)
-    }
+    let candidateAccess =
+      currentDocument?.url.standardizedFileURL == url.standardizedFileURL
+      ? currentDocumentAccess ?? SecurityScopedAccess(url: url)
+      : SecurityScopedAccess(url: url)
+    let candidateURL = candidateAccess.url
+    if recordsRecentDocument { recordRecentDocument(url) }
     loadTask?.cancel()
     phase = .loading(url.lastPathComponent)
 
-    let resourceRootURL = preferredResourceRootURL ?? containingWorkspaceRoot(for: url)
+    let resourceRootURL = preferredResourceRootURL ?? containingWorkspaceRoot(for: candidateURL)
+    let editingState = preservesEditingState && isEditing
     let fileService = self.fileService
     loadTask = Task { [weak self] in
       do {
         let document = try await Task.detached(priority: .userInitiated) {
-          try fileService.loadDocument(at: url)
+          try fileService.loadDocument(at: candidateURL)
         }.value
-        guard !Task.isCancelled else { return }
-        self?.phase = .loaded(document.withResourceRoot(resourceRootURL))
+        guard !Task.isCancelled, let self else { return }
+        applyLoadedDocument(
+          document.withResourceRoot(resourceRootURL),
+          access: candidateAccess,
+          isEditing: editingState
+        )
       } catch {
         guard !Task.isCancelled else { return }
         self?.phase = .failure(error.localizedDescription)
       }
     }
+  }
+
+  private func applyLoadedDocument(
+    _ document: MarkdownDocument,
+    access: SecurityScopedAccess?,
+    isEditing: Bool = false
+  ) {
+    currentDocumentAccess = access
+    phase = .loaded(document)
+    draftContent = document.content
+    self.isEditing = isEditing
+    saveStatusMessage = nil
+    saveErrorMessage = nil
+  }
+
+  private func performSave(
+    to url: URL,
+    expectedModificationDate: Date?,
+    expectedContent: String?,
+    expectedTargetExists: Bool
+  ) {
+    guard let currentDocument, !isSaving else { return }
+
+    let contentToSave = draftContent
+    let sourceURL = currentDocument.url.standardizedFileURL
+    let destinationURL = url.standardizedFileURL
+    let destinationAccess =
+      destinationURL == sourceURL
+      ? currentDocumentAccess ?? SecurityScopedAccess(url: url)
+      : SecurityScopedAccess(url: url)
+    let operationID = UUID()
+    let fileService = self.fileService
+
+    saveTask?.cancel()
+    saveOperationID = operationID
+    isSaving = true
+    saveErrorMessage = nil
+    saveStatusMessage = "正在保存…"
+
+    saveTask = Task { [weak self] in
+      do {
+        let savedDocument = try await Task.detached(priority: .userInitiated) {
+          try fileService.saveDocument(
+            content: contentToSave,
+            to: destinationURL,
+            expectedModificationDate: expectedModificationDate,
+            expectedContent: expectedContent,
+            expectedTargetExists: expectedTargetExists
+          )
+        }.value
+        guard !Task.isCancelled, let self, saveOperationID == operationID else { return }
+
+        let draftAfterSave = draftContent
+        let savedURL = savedDocument.url.standardizedFileURL
+        let savedAccess =
+          savedURL == destinationURL
+          ? destinationAccess : SecurityScopedAccess(url: savedDocument.url)
+        let savedResourceRootURL =
+          savedURL == sourceURL
+          ? currentDocument.resourceRootURL
+          : containingWorkspaceRoot(for: savedURL)
+        let savedWithResourceRoot = savedDocument.withResourceRoot(savedResourceRootURL)
+        currentDocumentAccess = savedAccess
+        phase = .loaded(savedWithResourceRoot)
+        if draftAfterSave == contentToSave {
+          draftContent = savedDocument.content
+          saveStatusMessage = "已保存"
+        } else {
+          draftContent = draftAfterSave
+          saveStatusMessage = "已保存上一版本，当前仍有未保存的更改"
+        }
+        isSaving = false
+        saveOperationID = nil
+        saveTask = nil
+
+        if savedURL != sourceURL {
+          recordRecentDocument(savedDocument.url)
+        }
+
+        if opensPendingDocumentAfterSave {
+          if hasUnsavedChanges {
+            opensPendingDocumentAfterSave = false
+            isUnsavedChangesConfirmationPresented = true
+          } else {
+            openPendingDocument()
+          }
+        }
+      } catch {
+        guard !Task.isCancelled, let self, saveOperationID == operationID else { return }
+        isSaving = false
+        saveOperationID = nil
+        saveTask = nil
+        saveStatusMessage = nil
+        saveErrorMessage = error.localizedDescription
+        if opensPendingDocumentAfterSave {
+          opensPendingDocumentAfterSave = false
+          isUnsavedChangesConfirmationPresented = true
+        }
+      }
+    }
+  }
+
+  private func snapshotSaveTarget(at url: URL) throws -> SaveTargetSnapshot {
+    let hasSecurityScope = url.startAccessingSecurityScopedResource()
+    defer {
+      if hasSecurityScope {
+        url.stopAccessingSecurityScopedResource()
+      }
+    }
+
+    let fileManager = FileManager.default
+    let path = url.path(percentEncoded: false)
+    guard fileManager.fileExists(atPath: path) else {
+      return SaveTargetSnapshot(exists: false, modificationDate: nil, content: nil)
+    }
+
+    let attributes = try fileManager.attributesOfItem(atPath: path)
+    guard attributes[.type] as? FileAttributeType == .typeRegular else {
+      throw FileAccessError.notRegularFile
+    }
+    guard let fileSize = attributes[.size] as? NSNumber else {
+      throw CocoaError(.fileReadUnknown)
+    }
+    guard fileSize.intValue <= LocalFileService.defaultMaximumFileSize else {
+      throw FileAccessError.fileTooLarge(
+        actual: fileSize.intValue,
+        limit: LocalFileService.defaultMaximumFileSize
+      )
+    }
+
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    let data = try handle.read(upToCount: fileSize.intValue + 1) ?? Data()
+    guard data.count == fileSize.intValue else {
+      throw FileAccessError.fileModifiedExternally
+    }
+    guard let content = String(data: data, encoding: .utf8) else {
+      throw FileAccessError.invalidUTF8
+    }
+
+    let latestAttributes = try fileManager.attributesOfItem(atPath: path)
+    guard
+      latestAttributes[.type] as? FileAttributeType == .typeRegular,
+      (latestAttributes[.size] as? NSNumber)?.intValue == fileSize.intValue,
+      latestAttributes[.modificationDate] as? Date
+        == attributes[.modificationDate] as? Date
+    else {
+      throw FileAccessError.fileModifiedExternally
+    }
+
+    return SaveTargetSnapshot(
+      exists: true,
+      modificationDate: attributes[.modificationDate] as? Date,
+      content: content
+    )
   }
 
   private func loadWorkspace(at url: URL, reason: WorkspaceLoadReason) {
@@ -293,7 +671,10 @@ final class ReaderViewModel: ObservableObject {
         scheduleSearch(delay: .zero)
 
         if reason.reloadsCurrentDocument {
-          reloadCurrentDocumentIfNeeded(in: snapshot.rootURL)
+          reloadCurrentDocumentIfNeeded(
+            in: snapshot.rootURL,
+            skipsUnchangedDocument: reason == .automatic
+          )
         }
       } catch is CancellationError {
         return
@@ -346,14 +727,54 @@ final class ReaderViewModel: ObservableObject {
     }
   }
 
-  private func reloadCurrentDocumentIfNeeded(in rootURL: URL) {
+  private func reloadCurrentDocumentIfNeeded(
+    in rootURL: URL,
+    skipsUnchangedDocument: Bool
+  ) {
     guard let document = currentDocument else { return }
     guard Self.contains(document.url, in: rootURL) else { return }
+    guard !hasUnsavedChanges, !isSaving else { return }
+    if skipsUnchangedDocument, documentOnDiskMatchesSnapshot(document) {
+      return
+    }
     loadDocument(
       at: document.url,
       recordsRecentDocument: false,
-      preferredResourceRootURL: rootURL
+      preferredResourceRootURL: rootURL,
+      preservesEditingState: true
     )
+  }
+
+  private func documentOnDiskMatchesSnapshot(_ document: MarkdownDocument) -> Bool {
+    guard
+      let attributes = try? FileManager.default.attributesOfItem(
+        atPath: document.url.path(percentEncoded: false)
+      ),
+      attributes[.modificationDate] as? Date == document.modificationDate,
+      let fileSize = attributes[.size] as? NSNumber,
+      fileSize.intValue == document.byteCount
+    else { return false }
+
+    do {
+      let handle = try FileHandle(forReadingFrom: document.url)
+      defer { try? handle.close() }
+      let data = try handle.read(upToCount: document.byteCount + 1) ?? Data()
+      return data.count == document.byteCount
+        && data.elementsEqual(document.content.utf8)
+    } catch {
+      return false
+    }
+  }
+
+  private func canCloseWorkspaceContainingCurrentDocument(_ rootURL: URL) -> Bool {
+    guard
+      hasUnsavedChanges,
+      let document = currentDocument,
+      Self.contains(document.url, in: rootURL)
+    else { return true }
+
+    saveErrorMessage = "当前文稿有未保存的更改，请先保存或还原后再关闭文件夹。"
+    return false
   }
 
   private func closeWorkspace(at rootURL: URL, removesBookmark: Bool) {
@@ -379,7 +800,11 @@ final class ReaderViewModel: ObservableObject {
         phase = .loaded(document.withResourceRoot(remainingRootURL))
       } else {
         loadTask?.cancel()
+        currentDocumentAccess = nil
         phase = .empty
+        draftContent = ""
+        isEditing = false
+        saveStatusMessage = nil
       }
     }
   }
@@ -455,15 +880,19 @@ final class ReaderViewModel: ObservableObject {
         let content = environment["FLUX_READER_UI_TEST_MARKDOWN"]
       else { return false }
 
-      let url = URL(fileURLWithPath: "/FluxReaderUITest.md")
-      phase = .loaded(
-        MarkdownDocument(
-          url: url,
-          content: content,
-          byteCount: Data(content.utf8).count,
-          modificationDate: nil
+      do {
+        let directoryURL = FileManager.default.temporaryDirectory
+          .appendingPathComponent("FluxReaderUITests", isDirectory: true)
+        try FileManager.default.createDirectory(
+          at: directoryURL,
+          withIntermediateDirectories: true
         )
-      )
+        let url = directoryURL.appendingPathComponent("FluxReaderUITest.md")
+        try Data(content.utf8).write(to: url, options: .atomic)
+        applyLoadedDocument(try fileService.loadDocument(at: url), access: nil)
+      } catch {
+        phase = .failure(error.localizedDescription)
+      }
       return true
     }
   #endif
