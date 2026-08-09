@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+.env
+.env.local
+
+# 应用包构建产物
+# app/server 由 scripts/build-combined.js 生成；app/ui 是手工维护的入口配置，须提交
+flux-reader/app/server/
+flux-reader/target/
+*.fpk

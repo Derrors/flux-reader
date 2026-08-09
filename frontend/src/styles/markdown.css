@@ -1,0 +1,266 @@
+/* ==========================================================================
+   Markdown 正文样式。
+   类名沿用 Flux 的 .flow-markdown-body / .markdown-root，排版节奏对齐其观感。
+   ========================================================================== */
+
+.flow-markdown-body {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--f-text-primary);
+  word-wrap: break-word;
+}
+
+/* ---------- 标题 ---------- */
+.flow-markdown-body h1,
+.flow-markdown-body h2,
+.flow-markdown-body h3,
+.flow-markdown-body h4,
+.flow-markdown-body h5,
+.flow-markdown-body h6 {
+  margin: 1.35em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.35;
+  scroll-margin-top: 64px; /* 配合 TOC 跳转，避免被顶栏遮住 */
+}
+.flow-markdown-body h1 { font-size: 1.4em; margin-top: 0; }
+.flow-markdown-body h2 {
+  font-size: 1.25em;
+}
+.flow-markdown-body h3 { font-size: 1.1em; }
+.flow-markdown-body h4 { font-size: 1em; }
+.flow-markdown-body h5,
+.flow-markdown-body h6 { font-size: 0.95em; color: var(--f-text-secondary); }
+
+/* ---------- 段落与列表 ---------- */
+.flow-markdown-body p { margin: 0.75em 0; }
+
+.flow-markdown-body ul,
+.flow-markdown-body ol { margin: 0.9em 0; padding-left: 1.6em; }
+.flow-markdown-body li { margin: 0.35em 0; }
+.flow-markdown-body li > ul,
+.flow-markdown-body li > ol { margin: 0.35em 0; }
+
+/* 任务列表 */
+.flow-markdown-body li input[type='checkbox'] {
+  margin-right: 0.5em;
+  vertical-align: middle;
+}
+.flow-markdown-body li:has(> input[type='checkbox']) { list-style: none; margin-left: -1.3em; }
+
+/* ---------- 引用 ---------- */
+.flow-markdown-body blockquote {
+  margin: 0.85em 0;
+  padding: 0.5em 1em;
+  border-left: 3px solid var(--f-border-l2);
+  color: var(--f-text-secondary);
+  background: transparent;
+  border-radius: 0 6px 6px 0;
+  line-height: 1.65;
+}
+.flow-markdown-body blockquote > p { white-space: pre-line; }
+.flow-markdown-body blockquote > :first-child { margin-top: 0; }
+.flow-markdown-body blockquote > :last-child { margin-bottom: 0; }
+
+/* ---------- 分隔线 ---------- */
+.flow-markdown-body hr {
+  height: 1px;
+  margin: 2em 0;
+  border: none;
+  background: var(--f-border-l1);
+}
+
+/* ---------- 链接 ---------- */
+.flow-markdown-body a {
+  color: var(--f-accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.flow-markdown-body a:hover { border-bottom-color: currentColor; }
+
+/* ---------- 行内代码 ---------- */
+.flow-markdown-body :not(pre) > code {
+  font-family: var(--f-font-mono);
+  font-size: 0.88em;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: var(--f-bg-overlay-l1);
+  color: var(--f-text-primary);
+}
+
+/* ---------- 代码块 ---------- */
+.code-block {
+  margin: 1.2em 0;
+  border: 1px solid var(--f-border-l1);
+  border-radius: var(--f-radius);
+  background: var(--f-code-body-bg);
+  overflow: hidden;
+}
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--f-text-tertiary);
+  background: var(--f-code-header-bg);
+  user-select: none;
+  border-bottom: 1px solid var(--f-border-l1);
+}
+.code-block-lang { font-family: var(--f-font-mono); }
+.code-block-actions { display: flex; gap: 6px; }
+.code-block-actions button { font-size: 12px; padding: 2px 8px; }
+
+.code-block-body {
+  overflow: auto;
+  background: var(--f-code-body-bg);
+}
+
+.code-block pre,
+.code-block .shiki {
+  margin: 0;
+  padding: 12px 16px;
+  font-family: var(--f-font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-x: auto;
+  background: transparent !important;
+}
+.code-block code { font-family: var(--f-font-mono); }
+.code-plain { white-space: pre; }
+
+.code-block-note {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--f-text-tertiary);
+  border-top: 1px solid var(--f-border-l1);
+}
+
+/* ---------- 表格 ---------- */
+.table-container {
+  margin: 1.2em 0;
+  overflow-x: auto;
+  border: 1px solid var(--f-border-l1);
+  border-radius: var(--f-radius);
+}
+.flow-markdown-body table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: 14px;
+}
+.flow-markdown-body th,
+.flow-markdown-body td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--f-border-l1);
+  border-right: 1px solid var(--f-border-l1);
+  text-align: left;
+  vertical-align: top;
+}
+.flow-markdown-body th {
+  background: var(--f-bg-overlay-l1);
+  font-weight: 600;
+}
+.flow-markdown-body tr:last-child td { border-bottom: none; }
+.flow-markdown-body th:last-child,
+.flow-markdown-body td:last-child { border-right: none; }
+
+/* ---------- 图片 ---------- */
+.flow-markdown-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+/* 连续多图排成网格，而非竖排堆叠 */
+.image-group {
+  display: grid;
+  gap: 8px;
+  margin: 1.2em 0;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.image-group[data-count='2'] { grid-template-columns: repeat(2, 1fr); }
+.image-group img { width: 100%; object-fit: cover; }
+
+/* ---------- 数学公式 ---------- */
+.flow-markdown-body .math-display {
+  margin: 1.2em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+.flow-markdown-body .math-error {
+  color: var(--f-danger);
+  background: transparent;
+}
+
+/* ---------- Mermaid ---------- */
+.mermaid-block {
+  position: relative;
+  margin: 1.2em 0;
+  padding: 16px;
+  border: 1px solid var(--f-border-l1);
+  border-radius: var(--f-radius);
+  background: var(--f-bg-secondary);
+}
+.mermaid-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.mermaid-block:hover .mermaid-toolbar { opacity: 1; }
+.mermaid-canvas { display: flex; justify-content: center; overflow-x: auto; }
+.mermaid-canvas svg { max-width: 100%; height: auto; }
+
+.mermaid-loading {
+  margin: 1.2em 0;
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--f-text-tertiary);
+  border: 1px dashed var(--f-border-l1);
+  border-radius: var(--f-radius);
+}
+.mermaid-error {
+  margin: 1.2em 0;
+  padding: 12px 16px;
+  border: 1px solid var(--f-danger);
+  border-radius: var(--f-radius);
+  font-size: 13px;
+}
+.mermaid-error-title { color: var(--f-danger); font-weight: 600; margin-bottom: 8px; }
+.mermaid-error pre {
+  margin: 0;
+  font-family: var(--f-font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--f-text-secondary);
+}
+.mermaid-error-source {
+  margin-top: 8px !important;
+  padding-top: 8px;
+  border-top: 1px solid var(--f-border-l1);
+}
+
+/* mermaid 的离屏渲染容器：需要真实挂在文档里（它要量文字尺寸），
+   但不能占据布局空间，因此用绝对定位移出可视区，而不是 display:none。 */
+.mermaid-stage {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* 兜底：mermaid 若仍往 body 直插错误图（临时容器 id 形如 dmermaid-*），
+   隐藏掉以免浮在应用之上破版。
+   正常路径已由 suppressErrorRendering:true 从源头阻止插入，
+   这里不限定在 .flow-markdown-body 内 —— 那个容器选不中挂在 body 上的孤儿节点。 */
+body > [id^='dmermaid-'],
+body > [aria-roledescription='error'],
+.mermaid-stage [aria-roledescription='error'] { display: none; }

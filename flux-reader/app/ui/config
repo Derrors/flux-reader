@@ -1,0 +1,15 @@
+{
+  ".url": {
+    "flux-reader.Application": {
+      "title": "Flux Reader",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/flux-reader",
+      "gatewaySocket": "flux-reader.sock",
+      "url": "/app/flux-reader",
+      "fileTypes": ["md", "markdown", "mdx"],
+      "allUsers": true
+    }
+  }
+}

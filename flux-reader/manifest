@@ -1,0 +1,15 @@
+appname="flux-reader"
+version="0.1.17"
+display_name="Flux Reader"
+desc="NAS 上的 Markdown 阅读器，支持 GFM 表格、代码高亮、数学公式与 Mermaid 图表"
+source="thirdparty"
+platform="all"
+maintainer="liqinghe.lqh"
+os_min_version="1.2.0401"
+install_dep_apps="nodejs_v22"
+desktop_uidir="ui"
+desktop_applaunchname="flux-reader.Application"
+ctl_stop="true"
+checkport="false"
+micro_app=true
+disable_authorization_path=false

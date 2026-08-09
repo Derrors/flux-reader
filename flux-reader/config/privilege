@@ -1,0 +1,5 @@
+{
+  "defaults": { "run-as": "package" },
+  "username": "fluxreader_user",
+  "groupname": "fluxreader_group"
+}

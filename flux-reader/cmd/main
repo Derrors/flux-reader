@@ -1,0 +1,147 @@
+#!/bin/bash
+#
+# flux-reader 生命周期脚本。
+#
+# 退出码契约（务必遵守）：
+#   0 = 成功 / 正在运行
+#   3 = 未运行（status 专用；写成 1 会让应用中心状态显示异常）
+#   其他非 0 = 失败
+#
+# 关键约束：不要硬编码 /vol1 等路径 —— 安装卷由用户选择，
+# 一律使用系统注入的 TRIM_* 环境变量。
+
+set -u
+
+APP_NAME="${TRIM_APPNAME:-flux-reader}"
+APP_DEST="${TRIM_APPDEST:-/var/apps/${APP_NAME}}"
+VAR_DIR="${TRIM_PKGVAR:-${APP_DEST}/var}"
+
+NODE_BIN_DIR="/var/apps/nodejs_v22/target/bin"
+export PATH="${NODE_BIN_DIR}:${PATH}"
+
+# TRIM_APPDEST 已指向 /var/apps/{appname}/target（安装后 app/ 展开于此），
+# 因此下面一律基于 APP_DEST 直接拼子路径，不要再补 target/ 一层。
+SERVER_DIR="${APP_DEST}/server"
+ENTRY="${SERVER_DIR}/src/server.js"
+# 统一网关的 gatewaySocket 只写文件名，socket 须位于 target 目录下，
+# 即 ${TRIM_APPDEST}/{文件名}（app/ui/config 中声明为 "flux-reader.sock"）。
+SOCKET_PATH="${APP_DEST}/${APP_NAME}.sock"
+PID_FILE="${VAR_DIR}/${APP_NAME}.pid"
+LOG_FILE="${VAR_DIR}/${APP_NAME}.log"
+
+mkdir -p "${VAR_DIR}"
+
+# 把错误信息同时写入应用日志、stderr 与系统临时日志。
+# TRIM_TEMP_LOGFILE 是系统注入的通道——写进去的内容会呈现在应用中心的
+# 失败提示里；只写自己的日志文件，用户在界面上只能看到笼统的
+# 「执行应用启动脚本失败」，无从判断原因。
+fail() {
+  local msg="[${APP_NAME}] ERROR: $*"
+  echo "${msg}" >>"${LOG_FILE}" 2>/dev/null
+  echo "${msg}" >&2
+  if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+    echo "${msg}" >>"${TRIM_TEMP_LOGFILE}" 2>/dev/null
+  fi
+  exit 1
+}
+
+is_running() {
+  [ -f "${PID_FILE}" ] || return 1
+  local pid
+  pid="$(cat "${PID_FILE}" 2>/dev/null)"
+  [ -n "${pid}" ] || return 1
+  kill -0 "${pid}" 2>/dev/null
+}
+
+do_start() {
+  if is_running; then
+    echo "[${APP_NAME}] already running"
+    return 0
+  fi
+
+  [ -f "${ENTRY}" ] || fail "服务入口不存在：${ENTRY}（应用包可能未正确构建）"
+  command -v node >/dev/null 2>&1 || fail "未找到 node，请确认已安装依赖应用 nodejs_v22"
+
+  # 清理上次残留的 socket，否则监听会 EADDRINUSE
+  rm -f "${SOCKET_PATH}"
+
+  cd "${SERVER_DIR}" || fail "无法进入服务目录：${SERVER_DIR}"
+
+  SOCKET_PATH="${SOCKET_PATH}" \
+  TRIM_APPNAME="${APP_NAME}" \
+  NODE_ENV=production \
+    nohup node "${ENTRY}" >>"${LOG_FILE}" 2>&1 &
+
+  local pid=$!
+  echo "${pid}" >"${PID_FILE}"
+
+  # 等待 socket 就绪，确认真的起来了
+  local i=0
+  while [ "${i}" -lt 30 ]; do
+    if [ -S "${SOCKET_PATH}" ] && kill -0 "${pid}" 2>/dev/null; then
+      echo "[${APP_NAME}] started (pid=${pid})"
+      return 0
+    fi
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      rm -f "${PID_FILE}"
+      fail "服务启动后立即退出。日志尾部：$(tail -n 15 "${LOG_FILE}" 2>/dev/null | tr '\n' ' | ')"
+    fi
+    sleep 0.2
+    i=$((i + 1))
+  done
+
+  fail "服务启动超时（socket 未就绪）。日志尾部：$(tail -n 15 "${LOG_FILE}" 2>/dev/null | tr '\n' ' | ')"
+}
+
+do_stop() {
+  if ! is_running; then
+    rm -f "${PID_FILE}" "${SOCKET_PATH}"
+    echo "[${APP_NAME}] not running"
+    return 0
+  fi
+
+  local pid
+  pid="$(cat "${PID_FILE}")"
+
+  # 先优雅退出，等待 10 秒，再强杀
+  kill -TERM "${pid}" 2>/dev/null
+  local i=0
+  while [ "${i}" -lt 50 ]; do
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.2
+    i=$((i + 1))
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    echo "[${APP_NAME}] graceful stop timed out, sending KILL" >>"${LOG_FILE}"
+    kill -KILL "${pid}" 2>/dev/null
+  fi
+
+  rm -f "${PID_FILE}" "${SOCKET_PATH}"
+  echo "[${APP_NAME}] stopped"
+  return 0
+}
+
+case "${1:-}" in
+  start)
+    do_start
+    ;;
+  stop)
+    do_stop
+    ;;
+  restart)
+    do_stop
+    do_start
+    ;;
+  status)
+    if is_running; then
+      echo "[${APP_NAME}] running"
+      exit 0
+    fi
+    echo "[${APP_NAME}] not running"
+    exit 3   # 未运行必须是 3，不是 1
+    ;;
+  *)
+    echo "usage: $0 {start|stop|restart|status}" >&2
+    exit 1
+    ;;
+esac

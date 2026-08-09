@@ -1,0 +1,18 @@
+{
+  "name": "flux-reader-workspace",
+  "private": true,
+  "version": "0.1.17",
+  "description": "飞牛 fnOS 上的 Markdown 阅读器，渲染效果对齐 Bits Flux",
+  "scripts": {
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "test": "npm --prefix backend test && npm --prefix frontend test",
+    "test:frontend": "npm --prefix frontend test",
+    "build": "node scripts/build-combined.js",
+    "pack": "npm run build && cd flux-reader && fnpack build"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}
