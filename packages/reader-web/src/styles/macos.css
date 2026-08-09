@@ -1,0 +1,33 @@
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.macos-renderer-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: var(--f-bg-base);
+}
+
+.macos-renderer {
+  width: min(100%, 956px);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 40px 48px 72px;
+}
+
+.macos-empty-document {
+  margin: 0;
+  color: var(--f-text-tertiary);
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .macos-renderer {
+    padding: 28px 24px 56px;
+  }
+}

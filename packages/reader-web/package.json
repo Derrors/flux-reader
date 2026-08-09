@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:macos": "vite build --mode macos",
     "preview": "vite preview",
     "test": "vitest run --config vitest.config.js",
     "test:watch": "vitest --config vitest.config.js"

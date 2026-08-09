@@ -48,37 +48,45 @@ function backendPlugin() {
   };
 }
 
-export default defineConfig({
-  base: BASE,
-  plugins: [react(), backendPlugin()],
-  // shiki worker 内部会做代码分割（按需加载语法定义），
-  // 默认的 iife 格式不支持分包，必须用 es。
-  worker: {
-    format: 'es',
-  },
-  build: {
-    outDir: 'dist',
-    // shiki / mermaid 体积较大，分包以便按需加载
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes('mermaid')) return 'markdown-mermaid';
-          if (id.includes('shiki')) return 'markdown-shiki';
-          if (id.includes('katex')) return 'markdown-katex';
+export default defineConfig(({ mode }) => {
+  const isMacOSBuild = mode === 'macos';
+
+  return {
+    // macOS 通过 App 内的自定义 URL scheme 加载 Bundle 资源；相对路径让产物
+    // 同时保持可移植，并把访问范围限制在 Reader 子目录。
+    base: isMacOSBuild ? './' : BASE,
+    plugins: [react(), !isMacOSBuild && backendPlugin()].filter(Boolean),
+    // shiki worker 内部会做代码分割（按需加载语法定义），
+    // 默认的 iife 格式不支持分包，必须用 es。
+    worker: {
+      format: 'es',
+    },
+    build: {
+      outDir: isMacOSBuild ? 'dist-macos' : 'dist',
+      emptyOutDir: true,
+      // macOS 只打包渲染核心，不引入 fnOS 应用外壳和 API。
+      rollupOptions: {
+        input: resolve(__dirname, isMacOSBuild ? 'macos.html' : 'index.html'),
+        output: {
+          manualChunks(id) {
+            if (id.includes('mermaid')) return 'markdown-mermaid';
+            if (id.includes('shiki')) return 'markdown-shiki';
+            if (id.includes('katex')) return 'markdown-katex';
+          },
         },
       },
+      chunkSizeWarningLimit: 1500,
     },
-    chunkSizeWarningLimit: 1500,
-  },
-  server: {
-    host: '0.0.0.0',
-    port: 5177,
-    strictPort: true,
-    // 预览环境经域名访问，放开 host 校验
-    allowedHosts: true,
-    proxy: {
-      // 前端 dev server 把接口转给本地后端
-      '/app/flux-reader/api': `http://127.0.0.1:${BACKEND_PORT}`,
+    server: {
+      host: '0.0.0.0',
+      port: 5177,
+      strictPort: true,
+      // 预览环境经域名访问，放开 host 校验
+      allowedHosts: true,
+      proxy: {
+        // 前端 dev server 把接口转给本地后端
+        '/app/flux-reader/api': `http://127.0.0.1:${BACKEND_PORT}`,
+      },
     },
-  },
+  };
 });

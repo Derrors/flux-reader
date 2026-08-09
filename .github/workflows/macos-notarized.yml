@@ -1,0 +1,188 @@
+name: Notarized macOS Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flux-reader-notarized-macos
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+  NPM_CONFIG_REPLACE_REGISTRY_HOST: always
+
+jobs:
+  build-notarize-and-publish:
+    name: Sign, notarize and attach Universal DMG
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Reject non-main runs
+        if: ${{ github.ref != 'refs/heads/main' }}
+        run: |
+          echo "公证发布只能从 main 分支运行。" >&2
+          exit 1
+
+      - name: Validate required Apple secrets
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+        run: |
+          set -euo pipefail
+          for variable in \
+            MACOS_SIGNING_IDENTITY \
+            CERTIFICATE_BASE64 \
+            CERTIFICATE_PASSWORD \
+            NOTARY_KEY_BASE64 \
+            APPLE_NOTARY_KEY_ID
+          do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "缺少 GitHub Actions secret：$variable" >&2
+              exit 1
+            fi
+          done
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/reader-web/package-lock.json
+
+      - name: Install shared reader dependencies
+        run: npm ci --prefix packages/reader-web --no-audit --no-fund
+
+      - name: Validate sources and tests
+        run: |
+          npm run version:check
+          npm run test:reader
+          npm run lint:macos
+          npm run test:macos
+          npm run test:macos-ui-build
+
+      - name: Read release metadata
+        id: metadata
+        run: node scripts/sync-version.js --check --github-output
+
+      - name: Import Developer ID credentials
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          KEYCHAIN_PATH: ${{ runner.temp }}/flux-reader-signing.keychain-db
+          CERTIFICATE_PATH: ${{ runner.temp }}/flux-reader-developer-id.p12
+          NOTARY_KEY_PATH: ${{ runner.temp }}/flux-reader-notary-key.p8
+        run: |
+          set -euo pipefail
+          keychain_password="$(openssl rand -hex 24)"
+
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          printf '%s' "$NOTARY_KEY_BASE64" | base64 --decode > "$NOTARY_KEY_PATH"
+          chmod 600 "$CERTIFICATE_PATH" "$NOTARY_KEY_PATH"
+
+          security create-keychain -p "$keychain_password" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$keychain_password" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Build, sign and notarize Universal DMG
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
+          APPLE_NOTARY_KEY_PATH: ${{ runner.temp }}/flux-reader-notary-key.p8
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          DERIVED_DATA: ${{ runner.temp }}/FluxReaderRelease
+          OUTPUT_DIR: ${{ github.workspace }}/dist/release
+          DMG_ASSET: ${{ steps.metadata.outputs.signed_dmg_asset }}
+        run: |
+          set -euo pipefail
+          npm run pack:macos
+          test -s "dist/release/$DMG_ASSET"
+
+          cd dist/release
+          shasum -a 256 "$DMG_ASSET" > "$DMG_ASSET.sha256"
+          shasum -a 256 --check "$DMG_ASSET.sha256"
+
+      - name: Upload notarized artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: notarized-macos-${{ github.run_id }}
+          path: |
+            dist/release/${{ steps.metadata.outputs.signed_dmg_asset }}
+            dist/release/${{ steps.metadata.outputs.signed_dmg_asset }}.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Attach notarized DMG to existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.metadata.outputs.tag }}
+          DMG_ASSET: ${{ steps.metadata.outputs.signed_dmg_asset }}
+        run: |
+          set -euo pipefail
+          if ! git show-ref --verify --quiet "refs/tags/$TAG"; then
+            echo "$TAG 尚未由标准 Release 工作流发布。请等待该工作流完成后重试。" >&2
+            exit 1
+          fi
+
+          tag_sha="$(git rev-list -n 1 "refs/tags/$TAG")"
+          if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+            echo "$TAG 指向 $tag_sha，当前提交为 $GITHUB_SHA。拒绝向旧版本上传资产。" >&2
+            exit 1
+          fi
+
+          release_json="$(gh release view "$TAG" --json isDraft,assets)"
+          if [[ "$(jq -r '.isDraft' <<<"$release_json")" != "false" ]]; then
+            echo "$TAG 尚未公开发布。" >&2
+            exit 1
+          fi
+          for asset in "$DMG_ASSET" "$DMG_ASSET.sha256"; do
+            if jq -e --arg name "$asset" '.assets[] | select(.name == $name)' \
+              <<<"$release_json" >/dev/null
+            then
+              echo "$TAG 已包含 $asset；为保持发布资产不可变，拒绝覆盖。" >&2
+              exit 1
+            fi
+          done
+
+          gh release upload "$TAG" \
+            "dist/release/$DMG_ASSET" \
+            "dist/release/$DMG_ASSET.sha256"
+
+      - name: Remove signing credentials
+        if: ${{ always() }}
+        env:
+          KEYCHAIN_PATH: ${{ runner.temp }}/flux-reader-signing.keychain-db
+          CERTIFICATE_PATH: ${{ runner.temp }}/flux-reader-developer-id.p12
+          NOTARY_KEY_PATH: ${{ runner.temp }}/flux-reader-notary-key.p8
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+          rm -f -- "$CERTIFICATE_PATH" "$NOTARY_KEY_PATH"

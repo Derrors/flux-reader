@@ -6,10 +6,11 @@ Flux Reader 是一个多平台 Markdown 阅读器 monorepo。共享阅读器支�
 | 平台 | 状态 | 实现 |
 |---|---|---|
 | fnOS | 可用 | React 阅读器 + Express 服务 + fnOS 统一网关 |
-| macOS | 规划中 | SwiftUI / AppKit 原生外壳 + 系统 WKWebView |
+| macOS | 可用（原生） | SwiftUI 原生应用 + WKWebView 共享高级渲染器 |
 
-当前可运行版本为 fnOS 应用：用户可以直接选择 Markdown 文件阅读，也可以点击
-「打开文件夹」浏览应用设置中已授权目录下的 `.md` 文件。
+fnOS 应用可直接选择 Markdown 文件，或浏览应用设置中已授权的目录。macOS 应用
+可以同时打开多个工作区，通过侧边栏目录树、文件名与正文搜索阅读，并使用安全书签
+恢复最近文稿和最多 8 个授权文件夹；FSEvents 会在内容变化后自动刷新索引与预览。
 
 ## 技术选型
 
@@ -42,11 +43,17 @@ flux-reader/
 │   │       ├── manifest                应用元数据与统一网关配置
 │   │       ├── config/                 权限与 API scope
 │   │       └── cmd/main                生命周期脚本
-│   └── macos/                          原生 macOS 客户端目录
+│   └── macos/                          原生 macOS 客户端
+│       ├── FluxReader.xcodeproj        Xcode 工程
+│       ├── FluxReader/                 SwiftUI / WebKit bridge 应用源码
+│       ├── FluxReaderTests/            原生单元测试
+│       └── FluxReaderUITests/          XCUITest UI 冒烟测试
 ├── packages/
 │   └── reader-web/                     Vite + React 共享阅读器
 │       └── src/
 │           ├── markdown/               渲染核心
+│           ├── macos-main.jsx          macOS 独立渲染入口
+│           ├── macos/                  原生 payload bridge
 │           └── components/             FileTree、Toc
 └── scripts/build-fnos.js               合并 fnOS 前后端产物
 ```
@@ -78,24 +85,32 @@ npm run dev:reader       # 启动共享阅读器（兼容命令：dev:frontend�
 npm test                         # 后端安全测试 + 前端回归测试
 npm run test:fnos                # 仅运行 fnOS 后端测试
 npm run test:reader              # 仅运行共享阅读器测试
+npm run test:macos               # 构建并运行 macOS 原生单元测试
+npm run test:macos-ui-build      # 编译 macOS UI 自动化套件
+npm run test:macos-ui            # 在已授予辅助功能权限的 Mac 上运行 UI 测试
+npm run test:all                 # 运行当前机器支持的全部测试
 npm --prefix packages/reader-web run test:watch  # 阅读器监听模式
 ```
 
 fnOS GitHub Actions 会在相关平台或共享阅读器路径发生变化时，使用 Node.js 22
-安装锁定依赖，依次执行 `npm test` 和 fnOS 生产构建。macOS 工程建立后将拥有独立
-工作流；修改 `packages/reader-web` 时两个平台的工作流都应运行。
+执行测试和生产构建。macOS 使用独立的 macOS 26 runner 构建 Xcode 工程并运行
+共享阅读器测试与原生单元测试。修改 `packages/reader-web` 时两个平台的工作流都会
+运行。
 
 前端测试使用 Vitest、jsdom 与 Testing Library，覆盖文件/文件夹选择、取消与
 失败保留状态、文件关联启动、403 回程重试、latest-wins 竞态、空文件、API URL
 编码，以及右侧目录折叠样式。宿主 SDK 与后端接口均在测试中隔离 mock，不依赖
 真实 fnOS 环境。
 
-## 打包安装
+## 打包与发布
 
 ```bash
 npm run install:all                  # 先装依赖（构建依赖它）
+npm run version:check                # 校验 fnOS / macOS 发布版本一致
 npm run build:fnos                   # 合并到 apps/fnos/package/app
+npm run build:macos-renderer         # 单独构建供 WKWebView 使用的共享阅读器
 npm run pack:fnos                    # 构建并调用 fnpack 生成 .fpk
+npm run pack:macos                   # macOS 上生成未公证的 Universal .dmg
 ```
 
 然后在 fnOS 应用中心离线安装 `.fpk`。
@@ -104,6 +119,32 @@ npm run pack:fnos                    # 构建并调用 fnpack 生成 .fpk
 
 `fnpack` 是飞牛官方独立二进制（非 npm 包），需按开发机架构从
 [官方文档](https://developer.fnnas.com/docs/cli/fnpack) 下载安装。
+
+### GitHub Release
+
+根目录 `VERSION` 是 fnOS 与 macOS 的唯一发布版本源。准备下一个版本时，先修改
+`VERSION`，再执行：
+
+```bash
+npm run version:sync
+npm run test:all
+```
+
+代码合入 `main` 后，`Release` 工作流会自动运行全部校验，并行构建
+`flux-reader-<version>.fpk` 与 `Flux-Reader-<version>-unnotarized-universal.dmg`，
+生成 `SHA256SUMS`，最后创建 `v<version>` GitHub Release。相同 tag 不会被移动或
+覆盖；如果新提交没有使用新的 `VERSION` / tag，工作流会明确失败，避免误覆盖旧版本。
+
+macOS 产物是 Universal 2（Intel + Apple Silicon），仅做 ad-hoc 签名，**没有
+Developer ID 签名，也没有经过 Apple 公证**。它适合自用、测试或受控环境；首次
+打开时 Gatekeeper 仍可能警告或阻止启动。仓库的 GitHub Actions 必须允许工作流
+使用 `contents: write`，才能创建 tag 和 Release。
+
+仓库还提供手动的 `Notarized macOS Release` 工作流。配置 Developer ID 证书和
+App Store Connect API key 后，它会构建 `Flux-Reader-<version>-universal.dmg`，
+完成 hardened runtime 签名、Apple 公证、ticket stapling 与 Gatekeeper 校验，再把
+DMG 和独立 SHA-256 文件附加到已经发布的同版本 GitHub Release。所需 secrets 与
+本地签名方式见 [`apps/macos/README.md`](apps/macos/README.md)。
 
 ### 常见问题
 
@@ -181,7 +222,6 @@ checkbox 保留但强制只读、其他 `input` 类型一律移除。
 
 ## 已知限制
 
-- macOS 客户端目前只有目录与架构边界，尚未建立 Xcode 工程。
 - 已在当前 fnOS 环境完成安装与核心流程验证；其他 fnOS / 飞牛 App 版本仍建议
   安装后做一次文件选择器与用户 ACL 冒烟测试。
 - mermaid 分包约 3.4 MB（gzip 936 KB），首次打开含图表的文档会有加载等待。

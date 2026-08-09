@@ -168,21 +168,6 @@ DOMPurify.addHook('afterSanitizeElements', (node) => {
     node.setAttribute('disabled', 'disabled');
   }
 
-  // 图片：src 不是可加载的资源时整个移除。
-  // DOMPurify 会剥掉 onerror 等事件属性，但 <img src="x"> 这类节点本身仍会
-  // 保留，浏览器加载失败后显示一个破图占位——既是视觉噪声，也让「载荷被拦下」
-  // 这件事看起来像没拦住。只放行 http(s) 与 data:image，其余（空 src、
-  // 相对的无效路径、非图片 data URI）一律删掉。
-  if (node.nodeName === 'IMG') {
-    const src = (node.getAttribute('src') || '').trim();
-    const ok =
-      /^https?:\/\//i.test(src) ||
-      /^data:image\//i.test(src) ||
-      src.startsWith('/') ||
-      src.startsWith('./') ||
-      src.startsWith('../');
-    if (!ok) node.remove();
-  }
 });
 
 // 链接安全：target=_blank 必须补 rel=noopener（防 tabnabbing）
