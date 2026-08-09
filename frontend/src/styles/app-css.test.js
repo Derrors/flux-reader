@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const css = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
+const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+  selectors: match[1],
+  declarations: match[2],
+}));
 
 describe('右侧目录折叠样式契约', () => {
   it('折叠面板不显示目录滚动条', () => {
@@ -16,14 +20,30 @@ describe('右侧目录折叠样式契约', () => {
   });
 
   it('hover、键盘焦点或固定展开时恢复目录内容与滚动', () => {
-    expect(css).toMatch(
-      /\.app-toc:hover \.toc-title,[\s\S]*?\.app-toc\.is-pinned \.toc-list\s*\{[^}]*opacity:\s*1;[^}]*visibility:\s*visible;[^}]*pointer-events:\s*auto;/,
+    const contentRule = rules.find(({ declarations }) => /opacity:\s*1;/.test(declarations));
+    expect(contentRule?.declarations).toMatch(
+      /visibility:\s*visible;[^}]*pointer-events:\s*auto;/s,
     );
-    expect(css).toMatch(
-      /\.app-toc:hover \.app-toc-panel,\s*\.app-toc:focus-within \.app-toc-panel\s*\{[^}]*overflow-y:\s*auto;/s,
-    );
-    expect(css).toMatch(
-      /\.app-toc\.is-pinned \.app-toc-panel\s*\{[^}]*overflow-y:\s*auto;/s,
-    );
+    for (const selector of [
+      '.app-toc:hover .toc-title',
+      '.app-toc:hover .toc-list',
+      '.app-toc:focus-within .toc-title',
+      '.app-toc:focus-within .toc-list',
+      '.app-toc.is-pinned .toc-title',
+      '.app-toc.is-pinned .toc-list',
+    ]) {
+      expect(contentRule?.selectors).toContain(selector);
+    }
+
+    const autoPanelRule = rules.find(({ selectors }) => (
+      selectors.includes('.app-toc:hover .app-toc-panel')
+    ));
+    expect(autoPanelRule?.selectors).toContain('.app-toc:focus-within .app-toc-panel');
+    expect(autoPanelRule?.declarations).toMatch(/overflow-y:\s*auto;/);
+
+    const pinnedPanelRule = rules.find(({ selectors }) => (
+      selectors.trim() === '.app-toc.is-pinned .app-toc-panel'
+    ));
+    expect(pinnedPanelRule?.declarations).toMatch(/overflow-y:\s*auto;/);
   });
 });

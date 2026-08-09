@@ -97,6 +97,19 @@ describe('App 文件与目录工作流', () => {
     expect(mocks.api.list).not.toHaveBeenCalled();
   });
 
+  it('OpenAPI 不可用时隐藏宿主文件入口，但仍可查看渲染示例', async () => {
+    mocks.api.env.mockResolvedValueOnce({ openApiAvailable: false });
+    const user = userEvent.setup();
+    render(<App />);
+
+    const sampleButton = await screen.findByRole('button', { name: '渲染示例' });
+    expect(screen.queryByRole('button', { name: '打开文件' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '打开文件夹' })).not.toBeInTheDocument();
+
+    await user.click(sampleButton);
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('# 示例');
+  });
+
   it('打开文件夹后自动展示目录，并可隐藏和恢复', async () => {
     const user = await renderReady();
     const navigation = await openDocsFolder(user);
@@ -216,12 +229,23 @@ describe('App 文件与目录工作流', () => {
     expect(await screen.findByText('尚未授权')).toBeVisible();
 
     mocks.api.list.mockResolvedValueOnce({ entries: docsEntries });
-    window.dispatchEvent(new Event('focus'));
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 180)));
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(mocks.api.file).toHaveBeenCalledTimes(2));
 
     expect(await screen.findByTestId('markdown-view')).toHaveTextContent('授权后内容');
-    expect(mocks.api.file).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+  });
+
+  it('当前目录授权被撤销后，从系统设置返回会隐藏失效目录', async () => {
+    const user = await renderReady();
+    await openDocsFolder(user);
+    mocks.api.list.mockRejectedValueOnce(httpError('目录授权已撤销', 403));
+
+    act(() => window.dispatchEvent(new Event('focus')));
+
+    expect(await screen.findByText('目录授权已撤销')).toBeVisible();
+    await waitFor(() => expect(screen.queryByRole('navigation')).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /文件目录/ })).not.toBeInTheDocument();
   });
 
   it('并发打开两个目录文件时只提交最后一次请求', async () => {
@@ -240,6 +264,22 @@ describe('App 文件与目录工作流', () => {
 
     await act(async () => first.resolve({ content: '过期的第一个文件' }));
     expect(screen.getByTestId('markdown-view')).toHaveTextContent('第二个文件');
+    expect(screen.queryByText('加载中…')).not.toBeInTheDocument();
+  });
+
+  it('较慢的渲染示例响应不能覆盖后来打开的目录文件', async () => {
+    const user = await renderReady();
+    const navigation = await openDocsFolder(user, [docsEntries[0]]);
+    const sample = deferred();
+    mocks.api.sample.mockReturnValueOnce(sample.promise);
+    mocks.api.file.mockResolvedValueOnce({ content: '后来打开的文件' });
+
+    await user.click(screen.getByRole('button', { name: '渲染示例' }));
+    await user.click(within(navigation).getByRole('button', { name: /a\.md/ }));
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('后来打开的文件');
+
+    await act(async () => sample.resolve({ content: '过期示例' }));
+    expect(screen.getByTestId('markdown-view')).toHaveTextContent('后来打开的文件');
     expect(screen.queryByText('加载中…')).not.toBeInTheDocument();
   });
 

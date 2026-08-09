@@ -36,5 +36,7 @@ if (typeof window !== 'undefined') {
   afterEach(() => {
     cleanup();
     window.history.replaceState({}, '', '/app/flux-reader/');
+    delete document.visibilityState;
+    delete document.documentElement.dataset.theme;
   });
 }

@@ -72,6 +72,9 @@ npm run test:frontend            # 仅运行前端测试
 npm --prefix frontend run test:watch  # 前端监听模式
 ```
 
+GitHub Actions 会在提交到 `main`、创建或更新 Pull Request，以及手动触发时，
+使用 Node.js 22 安装锁定依赖，依次执行 `npm test` 和生产构建。
+
 前端测试使用 Vitest、jsdom 与 Testing Library，覆盖文件/文件夹选择、取消与
 失败保留状态、文件关联启动、403 回程重试、latest-wins 竞态、空文件、API URL
 编码，以及右侧目录折叠样式。宿主 SDK 与后端接口均在测试中隔离 mock，不依赖

@@ -93,6 +93,15 @@ describe('trim-sdk 文件选择器封装', () => {
     await expect(pickMarkdownFile()).rejects.toThrow('bridge failed');
   });
 
+  it('SDK ready 失败时把错误作为降级结果返回，并让选择操作明确失败', async () => {
+    harness.instance.ready.mockRejectedValueOnce(new Error('ready failed'));
+    const { initSdk, pickMarkdownFile } = await loadSdkWrapper();
+
+    await expect(initSdk()).resolves.toEqual({ sdk: null, error: 'ready failed' });
+    await expect(pickMarkdownFile()).rejects.toThrow('fnOS 文件选择器不可用：ready failed');
+    expect(harness.instance.pickFile).not.toHaveBeenCalled();
+  });
+
   it('SDK 初始化在多个选择操作之间复用，标题桥接失败不影响阅读', async () => {
     harness.instance.pickFile
       .mockResolvedValueOnce(['/share/docs'])

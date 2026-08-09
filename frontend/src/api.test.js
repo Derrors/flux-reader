@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 
-function response(body, { ok = true, status = 200 } = {}) {
+function response(body, { ok, status = 200 } = {}) {
   return {
-    ok,
+    ok: ok ?? (status >= 200 && status < 300),
     status,
     text: vi.fn().mockResolvedValue(typeof body === 'string' ? body : JSON.stringify(body)),
   };
@@ -19,16 +19,23 @@ afterEach(() => {
 
 describe('api 请求契约', () => {
   it.each([
-    ['env', () => api.env(), '/app/flux-reader/api/env'],
-    ['list', () => api.list('/share/docs'), '/app/flux-reader/api/list'],
-    ['file', () => api.file('/share/docs/a.md'), '/app/flux-reader/api/file'],
-    ['sample', () => api.sample(), '/app/flux-reader/api/sample'],
-  ])('%s 使用统一网关前缀与同源凭证', async (_name, call, expectedPath) => {
+    ['env', () => api.env(), '/app/flux-reader/api/env', null],
+    ['list', () => api.list('/share/docs'), '/app/flux-reader/api/list', '/share/docs'],
+    ['file', () => api.file('/share/docs/a.md'), '/app/flux-reader/api/file', '/share/docs/a.md'],
+    ['sample', () => api.sample(), '/app/flux-reader/api/sample', null],
+  ])('%s 使用统一网关前缀、路径参数与同源凭证', async (
+    _name,
+    call,
+    expectedPath,
+    expectedFilePath,
+  ) => {
     await call();
 
     expect(fetch).toHaveBeenCalledTimes(1);
     const [requestUrl, options] = fetch.mock.calls[0];
-    expect(new URL(String(requestUrl)).pathname).toBe(expectedPath);
+    const parsedUrl = new URL(String(requestUrl));
+    expect(parsedUrl.pathname).toBe(expectedPath);
+    expect(parsedUrl.searchParams.get('path')).toBe(expectedFilePath);
     expect(options).toEqual({ credentials: 'same-origin' });
   });
 
