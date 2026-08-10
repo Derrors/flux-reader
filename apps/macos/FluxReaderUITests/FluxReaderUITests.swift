@@ -287,7 +287,7 @@ final class FluxReaderUITests: XCTestCase {
     )
   }
 
-  func testDirtySwitchAndQuitBothRequireExplicitDecision() {
+  func testDirtyTabSurvivesSwitchAndQuitRequiresExplicitDecision() {
     let app = makeApplication()
     configureTestDocument(
       app,
@@ -309,9 +309,33 @@ final class FluxReaderUITests: XCTestCase {
 
     XCTAssertTrue(waitUntilHittable(secondDocument, timeout: 5))
     secondDocument.click()
-    let switchCancelButton = app.sheets.buttons["取消"]
-    cancelInteraction(using: switchCancelButton, in: app)
+    let currentDocument = app.staticTexts["flux.current-document"]
+    XCTAssertTrue(
+      waitUntilValue(
+        of: currentDocument,
+        contains: "Second.md",
+        timeout: 5
+      )
+    )
+
+    let firstDocument = app.buttons["FluxReaderUITest.md"]
+    XCTAssertTrue(waitUntilHittable(firstDocument, timeout: 5))
+    firstDocument.click()
+    XCTAssertTrue(
+      waitUntilValue(
+        of: currentDocument,
+        contains: "FluxReaderUITest.md",
+        timeout: 5
+      )
+    )
     XCTAssertTrue(dirtyIndicator.waitForExistence(timeout: 5))
+    XCTAssertTrue(
+      waitUntilValue(
+        of: app.textViews["flux.editor"],
+        contains: "Unsaved",
+        timeout: 5
+      )
+    )
 
     app.typeKey("q", modifierFlags: .command)
     let quitCancelButton = app.dialogs.buttons["取消"]
