@@ -5,6 +5,10 @@
 <h1 align="center">Flux Reader</h1>
 
 <p align="center">
+  <strong>简体中文</strong> · <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
   为 fnOS 与 macOS 打造的本地优先 Markdown 阅读与编辑器。
   <br>
   从快速阅读，到多文档编辑、查找替换与安全恢复，都在一个干净的工作空间里完成。
