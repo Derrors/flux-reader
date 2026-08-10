@@ -107,7 +107,7 @@ struct FluxReaderApp: App {
           viewModel.toggleEditing()
         }
         .keyboardShortcut("e", modifiers: .command)
-        .disabled(viewModel.currentDocument == nil)
+        .disabled(!viewModel.canEdit)
 
         Button("还原到已保存版本", role: .destructive) {
           viewModel.revertDraft()
@@ -142,11 +142,48 @@ final class FluxReaderApplicationDelegate: NSObject, NSApplicationDelegate {
   func applicationShouldTerminate(
     _ sender: NSApplication
   ) -> NSApplication.TerminateReply {
+    #if DEBUG
+      if ProcessInfo.processInfo.environment[
+        "FLUX_READER_UI_TEST_FORCE_TERMINATION"
+      ] == "1" {
+        // XCUITest uses this only to model an abrupt process exit. Do not clear
+        // the recovery record or show the normal user-facing quit decision.
+        return .terminateNow
+      }
+    #endif
+
     guard let viewModel else { return .terminateNow }
-    guard viewModel.hasUnsavedChanges || viewModel.isSaving else {
+    guard
+      viewModel.hasUnsavedChanges || viewModel.isSaving
+        || viewModel.isDraftRecoverySyncing
+        || viewModel.hasDraftRecoveryCleanupFailure
+    else {
       return .terminateNow
     }
     guard !isTerminationPending else { return .terminateLater }
+
+    // Once a save has crossed into background I/O, "不保存" cannot safely
+    // mean "terminate immediately": the write may still commit after the
+    // process starts exiting. Wait for that operation and cancel termination
+    // if it fails or leaves a newer dirty draft.
+    if viewModel.isSaving {
+      beginTerminationAfterPendingWork(viewModel)
+      return .terminateLater
+    }
+
+    // Returning to the on-disk text starts an asynchronous recovery-record
+    // clear. A clean editor is not safe to terminate until that clear has
+    // either completed or failed visibly.
+    if !viewModel.hasUnsavedChanges, viewModel.isDraftRecoverySyncing {
+      beginTerminationAfterPendingWork(viewModel)
+      return .terminateLater
+    }
+
+    if !viewModel.hasUnsavedChanges,
+      viewModel.hasDraftRecoveryCleanupFailure
+    {
+      return presentDraftRecoveryCleanupFailure(sender, viewModel: viewModel)
+    }
 
     sender.activate(ignoringOtherApps: true)
     let alert = NSAlert()
@@ -160,7 +197,35 @@ final class FluxReaderApplicationDelegate: NSObject, NSApplicationDelegate {
 
     switch alert.runModal() {
     case .alertFirstButtonReturn:
-      beginTerminationAfterSaving(viewModel)
+      beginTerminationAfterPendingWork(viewModel)
+      return .terminateLater
+    case .alertSecondButtonReturn:
+      return viewModel.discardChangesForTermination()
+        ? .terminateNow : .terminateCancel
+    default:
+      return .terminateCancel
+    }
+  }
+
+  private func presentDraftRecoveryCleanupFailure(
+    _ sender: NSApplication,
+    viewModel: ReaderViewModel
+  ) -> NSApplication.TerminateReply {
+    sender.activate(ignoringOtherApps: true)
+    let alert = NSAlert()
+    alert.alertStyle = .warning
+    alert.messageText = "恢复草稿尚未清理"
+    alert.informativeText =
+      viewModel.draftRecoveryCleanupErrorMessage
+      ?? "恢复记录仍被保留。你可以重试清理，或明确保留记录后退出。"
+    alert.addButton(withTitle: "重试清理")
+    alert.addButton(withTitle: "保留并退出")
+    alert.addButton(withTitle: "取消")
+
+    switch alert.runModal() {
+    case .alertFirstButtonReturn:
+      viewModel.retryDraftRecoveryCleanup()
+      beginTerminationAfterPendingWork(viewModel)
       return .terminateLater
     case .alertSecondButtonReturn:
       return .terminateNow
@@ -169,22 +234,23 @@ final class FluxReaderApplicationDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  private func beginTerminationAfterSaving(_ viewModel: ReaderViewModel) {
+  private func beginTerminationAfterPendingWork(_ viewModel: ReaderViewModel) {
     isTerminationPending = true
-    if !viewModel.isSaving {
+    if viewModel.hasUnsavedChanges, !viewModel.isSaving {
       viewModel.save()
     }
 
     terminationTask?.cancel()
     terminationTask = Task { [weak self, weak viewModel] in
       guard let self, let viewModel else { return }
-      while viewModel.isSaving {
+      while viewModel.isSaving || viewModel.isDraftRecoverySyncing {
         try? await Task.sleep(for: .milliseconds(50))
       }
       guard !Task.isCancelled else { return }
 
       let shouldTerminate =
         !viewModel.hasUnsavedChanges && viewModel.saveErrorMessage == nil
+        && !viewModel.hasDraftRecoveryCleanupFailure
       isTerminationPending = false
       terminationTask = nil
       NSApp.reply(toApplicationShouldTerminate: shouldTerminate)

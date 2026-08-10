@@ -428,10 +428,10 @@ test('Markdown state validates access without reading the document body', async 
   assert.equal(Object.hasOwn(state, 'content'), false);
 
   await fsp.truncate(document, fileAccess.MAX_FILE_BYTES + 1);
-  await assert.rejects(
-    fileAccess.getMarkdownState('1000', document),
-    (err) => err.status === 413 && err.reason === 'FILE_TOO_LARGE',
-  );
+  const oversizedState = await fileAccess.getMarkdownState('1000', document);
+  assert.equal(oversizedState.size, fileAccess.MAX_FILE_BYTES + 1);
+  assert.match(oversizedState.revision, /^[a-f0-9]{64}$/u);
+  assert.equal(Object.hasOwn(oversizedState, 'content'), false);
 });
 
 test('workspace revision changes for nested Markdown and supported image metadata', async (t) => {

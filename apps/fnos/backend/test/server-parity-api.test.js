@@ -97,7 +97,32 @@ test('file-state API returns metadata without a document body', async (t) => {
     mtime: 34,
     ctime: 56,
   });
-  assert.deepEqual(received, ['1000', '/volume/alias.md']);
+  assert.deepEqual(received.slice(0, 2), ['1000', '/volume/alias.md']);
+  assert.equal(received[2].signal.aborted, false);
+});
+
+test('file API forwards a live request signal to the Markdown reader', async (t) => {
+  const original = fileAccess.readMarkdown;
+  let received;
+  fileAccess.readMarkdown = async (...args) => {
+    received = args;
+    return {
+      content: '# document',
+      actualPath: '/volume/readme.md',
+      size: 10,
+      revision: 'a'.repeat(64),
+    };
+  };
+  t.after(() => {
+    fileAccess.readMarkdown = original;
+  });
+
+  const response = await invoke('/api/file?path=%2Fvolume%2Falias.md');
+
+  assert.equal(response.status, 200);
+  assert.equal(JSON.parse(response.body.toString('utf8')).content, '# document');
+  assert.deepEqual(received.slice(0, 2), ['1000', '/volume/alias.md']);
+  assert.equal(received[2].signal.aborted, false);
 });
 
 test('search API accepts repeated selected workspace paths', async (t) => {
@@ -160,6 +185,47 @@ test('search API aborts backend work when the response closes early', async (t) 
   assert.equal(observedSignal.aborted, true);
   assert.equal(response.body.length, 0);
 });
+
+for (const entry of [
+  {
+    label: 'file',
+    method: 'readMarkdown',
+    url: '/api/file?path=%2Fvolume%2Freadme.md',
+  },
+  {
+    label: 'file-state',
+    method: 'getMarkdownState',
+    url: '/api/file-state?path=%2Fvolume%2Freadme.md',
+  },
+]) {
+  test(`${entry.label} API aborts file access when the response closes early`, async (t) => {
+    const original = fileAccess[entry.method];
+    let observedSignal;
+    fileAccess[entry.method] = async (...args) => {
+      observedSignal = args.at(-1).signal;
+      await new Promise((resolve, reject) => {
+        observedSignal.addEventListener(
+          'abort',
+          () => {
+            const err = new Error('aborted');
+            err.name = 'AbortError';
+            reject(err);
+          },
+          { once: true },
+        );
+      });
+    };
+    t.after(() => {
+      fileAccess[entry.method] = original;
+    });
+
+    const response = await invoke(entry.url, {
+      afterStart: ({ response: pendingResponse }) => pendingResponse.emit('close'),
+    });
+    assert.equal(observedSignal.aborted, true);
+    assert.equal(response.body.length, 0);
+  });
+}
 
 for (const entry of [
   {

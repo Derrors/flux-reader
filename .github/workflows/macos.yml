@@ -77,5 +77,5 @@ jobs:
       - name: Build and run unit tests
         run: npm run test:macos
 
-      - name: Compile UI automation suite
-        run: npm run test:macos-ui-build
+      - name: Run UI automation suite
+        run: npm run test:macos-ui

@@ -205,6 +205,9 @@ jobs:
           npm run lint:macos
           npm run test:macos
 
+      - name: Run macOS UI regression suite
+        run: npm run test:macos-ui
+
       - name: Build ad-hoc signed, unnotarized DMG
         env:
           BUILD_NUMBER: ${{ github.run_number }}

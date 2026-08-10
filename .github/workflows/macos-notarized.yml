@@ -72,7 +72,7 @@ jobs:
           npm run test:reader
           npm run lint:macos
           npm run test:macos
-          npm run test:macos-ui-build
+          npm run test:macos-ui
 
       - name: Read release metadata
         id: metadata

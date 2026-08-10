@@ -321,6 +321,72 @@ button.icon-btn { border: none; font-size: 16px; padding: 4px 8px; }
 .empty-state h2 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
 .empty-state p { font-size: 13px; color: var(--f-text-tertiary); line-height: 1.7; margin: 0; }
 
+/* ---------- 编辑、保存与防丢稿 ---------- */
+.save-status {
+  margin: -10px 0 12px;
+  color: var(--f-text-tertiary);
+  font-size: 11.5px;
+  text-align: right;
+}
+
+.markdown-editor {
+  display: block;
+  width: 100%;
+  min-height: calc(100vh - var(--f-header-h) - 128px);
+  resize: vertical;
+  padding: 20px 22px;
+  border: 1px solid var(--f-border-l1);
+  border-radius: var(--f-radius);
+  outline: none;
+  color: var(--f-text-primary);
+  background: var(--f-bg-base);
+  font: 13.5px/1.75 var(--f-font-mono);
+  tab-size: 2;
+}
+.markdown-editor:focus {
+  border-color: var(--f-accent);
+  box-shadow: 0 0 0 2px var(--f-accent-soft);
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(9, 9, 11, 0.42);
+}
+.dialog-card {
+  width: min(460px, 100%);
+  padding: 20px;
+  border: 1px solid var(--f-border-l2);
+  border-radius: 12px;
+  background: var(--f-bg-base);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.2);
+}
+.dialog-card h2 {
+  margin: 0 0 10px;
+  color: var(--f-text-primary);
+  font-size: 16px;
+}
+.dialog-card p {
+  margin: 0;
+  color: var(--f-text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.dialog-card .dialog-error {
+  margin-top: 10px;
+  color: var(--f-danger);
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
 /* ---------- fnOS multi-workspace sidebar ---------- */
 .fnos-reader .app-sidebar { width: 292px; padding: 0; }
 .fnos-reader .workspace-browser { display: flex; flex-direction: column; min-height: 100%; }

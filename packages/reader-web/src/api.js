@@ -28,6 +28,91 @@ async function get(path, params, { signal } = {}) {
     const err = new Error(data.message || `请求失败 (HTTP ${res.status})`);
     err.code = data.error;
     err.status = res.status;
+    err.details = data;
+    throw err;
+  }
+  return data;
+}
+
+async function put(path, body, { signal } = {}) {
+  const url = new URL(`${BASE}${path}`, window.location.origin);
+  const fetchOptions = {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+  if (signal) fetchOptions.signal = signal;
+  const res = await fetch(url, fetchOptions);
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`接口返回非 JSON (HTTP ${res.status})`);
+  }
+  if (!res.ok) {
+    const err = new Error(data.message || `请求失败 (HTTP ${res.status})`);
+    err.code = data.error;
+    err.status = res.status;
+    err.details = data;
+    throw err;
+  }
+  return data;
+}
+
+async function post(path, body, { signal } = {}) {
+  const url = new URL(`${BASE}${path}`, window.location.origin);
+  const fetchOptions = {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+  if (signal) fetchOptions.signal = signal;
+  const res = await fetch(url, fetchOptions);
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`接口返回非 JSON (HTTP ${res.status})`);
+  }
+  if (!res.ok) {
+    const err = new Error(data.message || `请求失败 (HTTP ${res.status})`);
+    err.code = data.error;
+    err.status = res.status;
+    err.details = data;
+    throw err;
+  }
+  return data;
+}
+
+async function del(path, params, { signal } = {}) {
+  const url = new URL(`${BASE}${path}`, window.location.origin);
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      if (value != null) url.searchParams.set(key, String(value));
+    });
+  }
+  const fetchOptions = {
+    method: 'DELETE',
+    credentials: 'same-origin',
+  };
+  if (signal) fetchOptions.signal = signal;
+  const res = await fetch(url, fetchOptions);
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`接口返回非 JSON (HTTP ${res.status})`);
+  }
+  if (!res.ok) {
+    const err = new Error(data.message || `请求失败 (HTTP ${res.status})`);
+    err.code = data.error;
+    err.status = res.status;
+    err.details = data;
     throw err;
   }
   return data;
@@ -67,8 +152,33 @@ function resourceUrl(documentPath, resourcePath, workspacePath, revision) {
 export const api = {
   env: () => get('/env'),
   list: (path, options) => get('/list', { path }, options),
-  file: (path) => get('/file', { path }),
-  fileState: (path) => get('/file-state', { path }),
+  file: (path, options) => get('/file', { path }, options),
+  saveFile: (path, content, expectedRevision, options) => put('/file', {
+    path,
+    content,
+    expectedRevision,
+  }, options),
+  recoveryState: (path, options) => get('/file-recovery', { path }, options),
+  recoveryVersion: (path, recoveryId, version, options) => get('/file-recovery', {
+    path,
+    recoveryId,
+    version,
+  }, options),
+  commitRecovery: (path, recoveryId, version, expectedRevision, options) => post(
+    '/file-recovery/commit',
+    {
+      path,
+      recoveryId,
+      version,
+      expectedRevision,
+    },
+    options,
+  ),
+  discardRecovery: (path, recoveryId, options) => del('/file-recovery', {
+    path,
+    recoveryId,
+  }, options),
+  fileState: (path, options) => get('/file-state', { path }, options),
   search: (paths, query, limit = 100, options) => get('/search', {
     path: Array.isArray(paths) ? paths : [paths],
     q: query,

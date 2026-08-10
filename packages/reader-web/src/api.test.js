@@ -22,6 +22,7 @@ describe('api 请求契约', () => {
     ['env', () => api.env(), '/app/flux-reader/api/env', null],
     ['list', () => api.list('/share/docs'), '/app/flux-reader/api/list', '/share/docs'],
     ['file', () => api.file('/share/docs/a.md'), '/app/flux-reader/api/file', '/share/docs/a.md'],
+    ['recoveryState', () => api.recoveryState('/share/docs/a.md'), '/app/flux-reader/api/file-recovery', '/share/docs/a.md'],
     ['fileState', () => api.fileState('/share/docs/a.md'), '/app/flux-reader/api/file-state', '/share/docs/a.md'],
     ['workspaceState', () => api.workspaceState('/share/docs'), '/app/flux-reader/api/workspace-state', '/share/docs'],
   ])('%s 使用统一网关前缀、路径参数与同源凭证', async (
@@ -61,6 +62,26 @@ describe('api 请求契约', () => {
     );
   });
 
+  it.each([
+    ['file', (signal) => api.file('/share/docs/a.md', { signal })],
+    ['fileState', (signal) => api.fileState('/share/docs/a.md', { signal })],
+    ['recoveryState', (signal) => api.recoveryState('/share/docs/a.md', { signal })],
+    ['recoveryVersion', (signal) => api.recoveryVersion(
+      '/share/docs/a.md',
+      'a'.repeat(48),
+      'baseline',
+      { signal },
+    )],
+  ])('%s 把 AbortSignal 透传给 fetch', async (_name, call) => {
+    const controller = new AbortController();
+    await call(controller.signal);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(URL),
+      { credentials: 'same-origin', signal: controller.signal },
+    );
+  });
+
   it('搜索通过重复 path 参数提交多个工作区，并带查询与上限', async () => {
     const controller = new AbortController();
     await api.search(
@@ -78,6 +99,72 @@ describe('api 请求契约', () => {
     expect(url.searchParams.get('limit')).toBe('100');
     expect(options).toEqual({
       credentials: 'same-origin',
+      signal: controller.signal,
+    });
+  });
+
+  it('保存使用同源 PUT JSON 并提交不透明 revision', async () => {
+    await api.saveFile('/share/docs/a.md', '# 新正文', 'a'.repeat(64));
+
+    const [requestUrl, options] = fetch.mock.calls[0];
+    expect(new URL(String(requestUrl)).pathname).toBe('/app/flux-reader/api/file');
+    expect(options).toEqual({
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: '/share/docs/a.md',
+        content: '# 新正文',
+        expectedRevision: 'a'.repeat(64),
+      }),
+    });
+  });
+
+  it('恢复正文与清理使用 opaque recoveryId，且不暴露服务端路径', async () => {
+    const recoveryId = 'a'.repeat(48);
+    await api.recoveryVersion('/share/docs/a.md', recoveryId, 'attempted');
+    let [requestUrl, options] = fetch.mock.calls[0];
+    let url = new URL(String(requestUrl));
+    expect(url.pathname).toBe('/app/flux-reader/api/file-recovery');
+    expect(url.searchParams.get('path')).toBe('/share/docs/a.md');
+    expect(url.searchParams.get('recoveryId')).toBe(recoveryId);
+    expect(url.searchParams.get('version')).toBe('attempted');
+    expect(options).toEqual({ credentials: 'same-origin' });
+
+    fetch.mockClear();
+    await api.discardRecovery('/share/docs/a.md', recoveryId);
+    [requestUrl, options] = fetch.mock.calls[0];
+    url = new URL(String(requestUrl));
+    expect(url.searchParams.get('path')).toBe('/share/docs/a.md');
+    expect(url.searchParams.get('recoveryId')).toBe(recoveryId);
+    expect(options).toEqual({ method: 'DELETE', credentials: 'same-origin' });
+  });
+
+  it('服务端恢复提交只发送 opaque 标识与 fresh revision', async () => {
+    const recoveryId = 'b'.repeat(48);
+    const revision = 'c'.repeat(64);
+    const controller = new AbortController();
+    await api.commitRecovery(
+      '/share/docs/a.md',
+      recoveryId,
+      'attempted',
+      revision,
+      { signal: controller.signal },
+    );
+
+    const [requestUrl, options] = fetch.mock.calls[0];
+    expect(new URL(String(requestUrl)).pathname)
+      .toBe('/app/flux-reader/api/file-recovery/commit');
+    expect(options).toEqual({
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: '/share/docs/a.md',
+        recoveryId,
+        version: 'attempted',
+        expectedRevision: revision,
+      }),
       signal: controller.signal,
     });
   });
@@ -125,6 +212,7 @@ describe('api 请求契约', () => {
       message: '没有权限',
       status: 403,
       code: 'USER_ACL_DENIED',
+      details: { message: '没有权限', error: 'USER_ACL_DENIED' },
     });
   });
 

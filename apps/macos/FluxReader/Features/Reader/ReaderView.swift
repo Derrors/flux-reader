@@ -18,16 +18,22 @@ struct ReaderView: View {
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
         if viewModel.currentDocument != nil {
-          Button {
-            viewModel.toggleEditing()
-          } label: {
-            Label(
-              viewModel.isEditing ? "预览" : "编辑",
-              systemImage: viewModel.isEditing ? "eye" : "pencil"
-            )
+          if viewModel.isViewingRetainedRecoveryVersion {
+            Label("恢复版本（只读）", systemImage: "lock.fill")
+              .help("恢复版本只能查看；如需继续处理，请使用“另存为”创建新文稿")
+              .accessibilityIdentifier("flux.recovery-read-only")
+          } else {
+            Button {
+              viewModel.toggleEditing()
+            } label: {
+              Label(
+                viewModel.isEditing ? "预览" : "编辑",
+                systemImage: viewModel.isEditing ? "eye" : "pencil"
+              )
+            }
+            .help(viewModel.isEditing ? "预览当前草稿" : "编辑当前文稿")
+            .accessibilityIdentifier("flux.edit")
           }
-          .help(viewModel.isEditing ? "预览当前草稿" : "编辑当前文稿")
-          .accessibilityIdentifier("flux.edit")
 
           if viewModel.hasUnsavedChanges {
             Text("未保存")
@@ -73,14 +79,19 @@ struct ReaderView: View {
         }
 
         Menu {
-          Picker("外观", selection: $appearance) {
-            ForEach(AppAppearance.allCases) { option in
-              Label(option.title, systemImage: option.systemImage)
-                .tag(option)
+          ForEach(AppAppearance.allCases) { option in
+            Button {
+              appearance = option
+            } label: {
+              Label(
+                option.title,
+                systemImage: appearance == option ? "checkmark" : option.systemImage
+              )
             }
           }
         } label: {
-          Label("外观", systemImage: appearance.systemImage)
+          Label("切换外观", systemImage: appearance.systemImage)
+            .labelStyle(.iconOnly)
         }
         .help("切换跟随系统、浅色或深色外观")
         .accessibilityIdentifier("flux.appearance")
@@ -144,12 +155,36 @@ struct ReaderView: View {
     } message: {
       Text("你可以先保存当前更改，或放弃更改后继续打开其他文稿。")
     }
+    .confirmationDialog(
+      "永久删除保存恢复版本？",
+      isPresented: recoveryVersionDeletionBinding,
+      titleVisibility: .visible
+    ) {
+      Button("删除恢复版本", role: .destructive) {
+        viewModel.confirmDeleteRetainedRecoveryVersion()
+      }
+      .accessibilityIdentifier("flux.confirm-delete-recovery-version")
+      Button("取消", role: .cancel) {
+        viewModel.cancelDeleteRetainedRecoveryVersion()
+      }
+    } message: {
+      Text(
+        "恢复版本用于保留其他应用通过旧文件句柄晚到写入的内容。应用至少保留 24 小时；确认删除后无法恢复。"
+      )
+    }
     .alert("无法完成文稿操作", isPresented: saveErrorBinding) {
       Button("好") {
         viewModel.dismissSaveError()
       }
     } message: {
       Text(viewModel.saveErrorMessage ?? "未知错误")
+    }
+    .alert("已恢复未保存的草稿", isPresented: draftRecoveryMessageBinding) {
+      Button("继续编辑") {
+        viewModel.dismissDraftRecoveryMessage()
+      }
+    } message: {
+      Text(viewModel.draftRecoveryMessage ?? "已恢复草稿，磁盘文件尚未被覆盖。")
     }
     .searchable(
       text: $viewModel.searchQuery,
@@ -160,6 +195,9 @@ struct ReaderView: View {
 
   private var navigationTitle: String {
     guard let document = viewModel.currentDocument else { return "Flux Reader" }
+    if viewModel.isViewingRetainedRecoveryVersion {
+      return "\(document.displayName) — 恢复版本（只读）"
+    }
     return viewModel.hasUnsavedChanges
       ? "\(document.displayName) — 已修改" : document.displayName
   }
@@ -169,6 +207,24 @@ struct ReaderView: View {
       get: { viewModel.saveErrorMessage != nil },
       set: { isPresented in
         if !isPresented { viewModel.dismissSaveError() }
+      }
+    )
+  }
+
+  private var draftRecoveryMessageBinding: Binding<Bool> {
+    Binding(
+      get: { viewModel.draftRecoveryMessage != nil },
+      set: { isPresented in
+        if !isPresented { viewModel.dismissDraftRecoveryMessage() }
+      }
+    )
+  }
+
+  private var recoveryVersionDeletionBinding: Binding<Bool> {
+    Binding(
+      get: { viewModel.recoveryVersionPendingDeletion != nil },
+      set: { isPresented in
+        if !isPresented { viewModel.cancelDeleteRetainedRecoveryVersion() }
       }
     )
   }
@@ -192,6 +248,10 @@ struct ReaderView: View {
       }
 
       workspaceSection
+
+      if !viewModel.retainedRecoveryVersions.isEmpty {
+        retainedRecoveryVersionsSection
+      }
 
       if !viewModel.recentDocuments.isEmpty {
         Section("最近文稿") {
@@ -222,6 +282,54 @@ struct ReaderView: View {
     .accessibilityIdentifier("flux.sidebar")
     .navigationTitle("Flux Reader")
     .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 380)
+  }
+
+  @ViewBuilder
+  private var retainedRecoveryVersionsSection: some View {
+    Section("保存恢复版本") {
+      ForEach(viewModel.retainedRecoveryVersions) { version in
+        HStack(spacing: 8) {
+          Button {
+            viewModel.openRetainedRecoveryVersion(version)
+          } label: {
+            VStack(alignment: .leading, spacing: 2) {
+              Label(version.displayName, systemImage: "clock.arrow.circlepath")
+                .lineLimit(1)
+              Text(version.createdAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+              if version.state == .pending {
+                Text("未完成保存事务，内容已保留")
+                  .font(.caption2)
+                  .foregroundStyle(.orange)
+                  .accessibilityIdentifier("flux.recovery-state-pending")
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .buttonStyle(.plain)
+          .help("打开保留版本，不覆盖当前磁盘文件")
+          .accessibilityIdentifier("flux.recovery-version-\(version.id.uuidString)")
+
+          Button {
+            viewModel.requestDeleteRetainedRecoveryVersion(version)
+          } label: {
+            Image(systemName: "trash")
+          }
+          .buttonStyle(.borderless)
+          .help("明确删除恢复版本")
+          .accessibilityIdentifier(
+            "flux.delete-recovery-version-\(version.id.uuidString)"
+          )
+        }
+      }
+
+      Text(
+        "应用不会自动删除恢复版本。每份文稿最多 5 个、全部文稿最多 50 个、总量最多 100 MiB；达到上限时保存会在写入前暂停。版本保留满 24 小时后，可点击垃圾桶并明确确认删除，再重试保存。"
+      )
+      .font(.caption2)
+      .foregroundStyle(.secondary)
+    }
   }
 
   @ViewBuilder
@@ -462,21 +570,20 @@ struct ReaderView: View {
   }
 
   private func presentSavePanel() {
-    guard let document = viewModel.currentDocument else { return }
-    let sourceDocumentURL = document.url.standardizedFileURL
+    guard let presentation = viewModel.saveAsPresentation else { return }
 
     let panel = NSSavePanel()
     panel.title = "另存 Markdown 文稿"
     panel.prompt = "保存"
-    panel.nameFieldStringValue = document.displayName
-    panel.directoryURL = document.url.deletingLastPathComponent()
+    panel.nameFieldStringValue = presentation.suggestedFileName
+    panel.directoryURL = presentation.suggestedDirectoryURL
     panel.allowedContentTypes = MarkdownContentType.allowedContentTypes
     panel.allowsOtherFileTypes = false
     panel.canCreateDirectories = true
     panel.isExtensionHidden = false
     panel.begin { response in
       guard response == .OK, let url = panel.url else { return }
-      viewModel.saveAs(to: url, for: sourceDocumentURL)
+      viewModel.saveAs(to: url, for: presentation.sourceDocumentURL)
     }
   }
 }

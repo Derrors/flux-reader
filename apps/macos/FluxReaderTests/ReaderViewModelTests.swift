@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 
@@ -47,7 +48,8 @@ final class ReaderViewModelTests: XCTestCase {
     store.recents = [RecentDocument(url: markdownURL, lastOpenedAt: Date())]
     let viewModel = ReaderViewModel(
       bookmarkStore: store,
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.restoreLibraryIfNeeded()
@@ -70,7 +72,8 @@ final class ReaderViewModelTests: XCTestCase {
     let store = InMemoryBookmarkStore()
     let viewModel = ReaderViewModel(
       bookmarkStore: store,
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.open(markdownURL)
@@ -86,13 +89,157 @@ final class ReaderViewModelTests: XCTestCase {
   }
 
   @MainActor
+  func testRetainedRecoveryVersionOpensReadOnlyAndCannotSaveInPlace() async throws {
+    let sourceDirectory = temporaryDirectory.appendingPathComponent(
+      "Documents",
+      isDirectory: true
+    )
+    let recoveryDirectory = temporaryDirectory.appendingPathComponent(
+      "Recovery",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(
+      at: sourceDirectory,
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: recoveryDirectory,
+      withIntermediateDirectories: true
+    )
+    let recoveryURL = recoveryDirectory.appendingPathComponent(
+      ".normal.flux-reader-recovery.md"
+    )
+    let normalURL = sourceDirectory.appendingPathComponent("normal.md")
+    try Data("# Recovery".utf8).write(to: recoveryURL)
+    try Data("# Normal".utf8).write(to: normalURL)
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(),
+      retainedRecoveryStore: EphemeralRetainedFileRecoveryStore()
+    )
+    let version = RetainedFileRecoveryVersion(
+      sourceURL: normalURL,
+      sourceBookmark: nil,
+      recoveryURL: recoveryURL,
+      byteCount: Data("# Recovery".utf8).count,
+      contentDigest: "recovery",
+      state: .retained
+    )
+
+    viewModel.openRetainedRecoveryVersion(version)
+    await waitUntil { viewModel.currentDocument?.url == recoveryURL.standardizedFileURL }
+
+    XCTAssertTrue(viewModel.isViewingRetainedRecoveryVersion)
+    XCTAssertFalse(viewModel.canEdit)
+    XCTAssertFalse(viewModel.isEditing)
+    XCTAssertTrue(viewModel.canSaveAs)
+    XCTAssertEqual(
+      viewModel.saveAsPresentation,
+      ReaderViewModel.SaveAsPresentation(
+        sourceDocumentURL: recoveryURL.standardizedFileURL,
+        suggestedDirectoryURL: sourceDirectory.standardizedFileURL,
+        suggestedFileName: "normal.md"
+      )
+    )
+    viewModel.toggleEditing()
+    XCTAssertFalse(viewModel.isEditing)
+
+    viewModel.draftContent = "# Attempted overwrite"
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertFalse(viewModel.canSave)
+    viewModel.save()
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(try String(contentsOf: recoveryURL, encoding: .utf8), "# Recovery")
+
+    viewModel.revertDraft()
+    viewModel.open(normalURL)
+    await waitUntil { viewModel.currentDocument?.url == normalURL.standardizedFileURL }
+    XCTAssertFalse(viewModel.isViewingRetainedRecoveryVersion)
+    XCTAssertTrue(viewModel.canEdit)
+  }
+
+  @MainActor
+  func testRetainedRecoverySaveAsRejectsSidecarThroughSymlinkAlias() async throws {
+    let sourceDirectory = temporaryDirectory.appendingPathComponent(
+      "Documents",
+      isDirectory: true
+    )
+    let recoveryDirectory = temporaryDirectory.appendingPathComponent(
+      "Recovery",
+      isDirectory: true
+    )
+    let recoveryAliasDirectory = temporaryDirectory.appendingPathComponent(
+      "Recovery Alias",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(
+      at: sourceDirectory,
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: recoveryDirectory,
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createSymbolicLink(
+      at: recoveryAliasDirectory,
+      withDestinationURL: recoveryDirectory
+    )
+
+    let sourceURL = sourceDirectory.appendingPathComponent("report.md")
+    let recoveryURL = recoveryDirectory.appendingPathComponent(
+      ".report.flux-reader-recovery.md"
+    )
+    let aliasedRecoveryURL = recoveryAliasDirectory.appendingPathComponent(
+      recoveryURL.lastPathComponent
+    )
+    try Data("# Source".utf8).write(to: sourceURL)
+    try Data("# Recovery".utf8).write(to: recoveryURL)
+    let fileService = BlockingFileService()
+    let viewModel = ReaderViewModel(
+      fileService: fileService,
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(),
+      retainedRecoveryStore: EphemeralRetainedFileRecoveryStore()
+    )
+    let version = RetainedFileRecoveryVersion(
+      sourceURL: sourceURL,
+      sourceBookmark: nil,
+      recoveryURL: recoveryURL,
+      byteCount: Data("# Recovery".utf8).count,
+      contentDigest: "recovery",
+      state: .retained
+    )
+
+    viewModel.openRetainedRecoveryVersion(version)
+    await waitUntil { viewModel.currentDocument?.url == recoveryURL.standardizedFileURL }
+    let presentation = try XCTUnwrap(viewModel.saveAsPresentation)
+    viewModel.saveAs(
+      to: aliasedRecoveryURL,
+      for: presentation.sourceDocumentURL
+    )
+
+    XCTAssertFalse(fileService.saveStarted)
+    XCTAssertEqual(
+      viewModel.saveErrorMessage,
+      "恢复版本是只读安全副本，不能覆盖；请选择原文稿或其他位置。"
+    )
+    XCTAssertEqual(
+      try String(contentsOf: recoveryURL, encoding: .utf8),
+      "# Recovery"
+    )
+  }
+
+  @MainActor
   func testImporterRoutesDocumentsAndFoldersThroughOnePresentation() async throws {
     let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
     try Data("# Guide".utf8).write(to: markdownURL)
     let store = InMemoryBookmarkStore()
     let viewModel = ReaderViewModel(
       bookmarkStore: store,
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.presentFileImporter()
@@ -118,7 +265,8 @@ final class ReaderViewModelTests: XCTestCase {
   func testImporterCanRetryAfterCancellation() {
     let viewModel = ReaderViewModel(
       bookmarkStore: InMemoryBookmarkStore(),
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
     let cancellation = NSError(
       domain: NSCocoaErrorDomain,
@@ -140,7 +288,8 @@ final class ReaderViewModelTests: XCTestCase {
     try Data("# Original".utf8).write(to: markdownURL)
     let viewModel = ReaderViewModel(
       bookmarkStore: InMemoryBookmarkStore(),
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.open(markdownURL)
@@ -174,12 +323,110 @@ final class ReaderViewModelTests: XCTestCase {
   }
 
   @MainActor
+  func testTerminationWaitsForInFlightSaveAndKeepsRecoveryUntilCommit() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    try Data("# Original".utf8).write(to: markdownURL)
+    let fileService = BlockingFileService()
+    let recoveryStore = InMemoryDraftRecoveryStore()
+    let viewModel = ReaderViewModel(
+      fileService: fileService,
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: recoveryStore
+    )
+    let applicationDelegate = FluxReaderApplicationDelegate()
+    applicationDelegate.viewModel = viewModel
+
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+    viewModel.draftContent = "# Saved during termination"
+    await waitUntil(timeoutIterations: 150) { recoveryStore.record != nil }
+    viewModel.save()
+    await waitUntil { fileService.saveStarted }
+
+    let reply = applicationDelegate.applicationShouldTerminate(NSApplication.shared)
+    XCTAssertEqual(reply, .terminateLater)
+    XCTAssertNotNil(recoveryStore.record)
+    XCTAssertTrue(viewModel.isSaving)
+
+    fileService.finishSave()
+    await waitUntil { !viewModel.isSaving }
+    XCTAssertNil(recoveryStore.record)
+  }
+
+  @MainActor
+  func testTerminationWaitsForCleanDraftRecoveryClear() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    let diskContent = "# Disk"
+    try Data(diskContent.utf8).write(to: markdownURL)
+    let recoveryStore = BlockingClearDraftRecoveryStore()
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: recoveryStore
+    )
+    let applicationDelegate = FluxReaderApplicationDelegate()
+    applicationDelegate.viewModel = viewModel
+
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+    viewModel.draftContent = "# Dirty"
+    await waitUntil(timeoutIterations: 150) { recoveryStore.record != nil }
+
+    viewModel.draftContent = diskContent
+    await waitUntil { recoveryStore.clearStarted }
+    XCTAssertFalse(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.isDraftRecoverySyncing)
+    XCTAssertNotNil(recoveryStore.record)
+
+    let reply = applicationDelegate.applicationShouldTerminate(NSApplication.shared)
+    XCTAssertEqual(reply, .terminateLater)
+    XCTAssertNotNil(recoveryStore.record)
+
+    recoveryStore.finishClear()
+    await waitUntil { !viewModel.isDraftRecoverySyncing }
+    XCTAssertNil(recoveryStore.record)
+    XCTAssertFalse(viewModel.hasDraftRecoveryCleanupFailure)
+  }
+
+  @MainActor
+  func testFailedCleanDraftRecoveryClearRetainsRecordAndReportsFailure() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    let diskContent = "# Disk"
+    try Data(diskContent.utf8).write(to: markdownURL)
+    let recoveryStore = FailingClearDraftRecoveryStore()
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: recoveryStore
+    )
+
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+    viewModel.draftContent = "# Dirty"
+    await waitUntil(timeoutIterations: 150) { recoveryStore.record != nil }
+
+    viewModel.draftContent = diskContent
+    await waitUntil {
+      !viewModel.isDraftRecoverySyncing
+        && viewModel.hasDraftRecoveryCleanupFailure
+    }
+
+    XCTAssertNotNil(recoveryStore.record)
+    XCTAssertTrue(viewModel.draftRecoveryMessage?.contains("恢复记录已保留") == true)
+    XCTAssertTrue(
+      viewModel.draftRecoveryCleanupErrorMessage?.contains("拒绝清理") == true
+    )
+  }
+
+  @MainActor
   func testImporterFailureKeepsCurrentDirtyDraftAccessible() async throws {
     let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
     try Data("# Original".utf8).write(to: markdownURL)
     let viewModel = ReaderViewModel(
       bookmarkStore: InMemoryBookmarkStore(),
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.open(markdownURL)
@@ -211,7 +458,8 @@ final class ReaderViewModelTests: XCTestCase {
     )
     let viewModel = ReaderViewModel(
       bookmarkStore: InMemoryBookmarkStore(),
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.open(markdownURL)
@@ -271,7 +519,8 @@ final class ReaderViewModelTests: XCTestCase {
     let viewModel = ReaderViewModel(
       folderService: folderService,
       bookmarkStore: store,
-      workspaceWatcher: watcher
+      workspaceWatcher: watcher,
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.restoreLibraryIfNeeded()
@@ -304,7 +553,8 @@ final class ReaderViewModelTests: XCTestCase {
     let viewModel = ReaderViewModel(
       folderService: folderService,
       bookmarkStore: store,
-      workspaceWatcher: watcher
+      workspaceWatcher: watcher,
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.restoreLibraryIfNeeded()
@@ -335,7 +585,8 @@ final class ReaderViewModelTests: XCTestCase {
     let store = InMemoryBookmarkStore()
     let viewModel = ReaderViewModel(
       bookmarkStore: store,
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.open(firstURL)
@@ -384,7 +635,8 @@ final class ReaderViewModelTests: XCTestCase {
     let viewModel = ReaderViewModel(
       fileService: fileService,
       bookmarkStore: InMemoryBookmarkStore(),
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.open(firstURL)
@@ -420,7 +672,8 @@ final class ReaderViewModelTests: XCTestCase {
     try Data("# Second".utf8).write(to: secondURL)
     let viewModel = ReaderViewModel(
       bookmarkStore: InMemoryBookmarkStore(),
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.open(firstURL)
@@ -460,7 +713,8 @@ final class ReaderViewModelTests: XCTestCase {
     let viewModel = ReaderViewModel(
       fileService: fileService,
       bookmarkStore: InMemoryBookmarkStore(),
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.open(sourceURL)
@@ -491,6 +745,237 @@ final class ReaderViewModelTests: XCTestCase {
   }
 
   @MainActor
+  func testClosingWorkspaceDuringSaveDoesNotResurrectDocument() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    try Data("# Original".utf8).write(to: markdownURL)
+    let store = InMemoryBookmarkStore()
+    store.workspaceURLs = [temporaryDirectory]
+    let fileService = BlockingFileService()
+    let viewModel = ReaderViewModel(
+      fileService: fileService,
+      bookmarkStore: store,
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
+    )
+
+    viewModel.restoreLibraryIfNeeded()
+    await waitUntil { viewModel.workspaces.count == 1 }
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+    viewModel.draftContent = "# Saved"
+    viewModel.save()
+    await waitUntil { fileService.saveStarted }
+
+    let workspace = try XCTUnwrap(viewModel.workspaces.first)
+    viewModel.closeWorkspace(workspace)
+
+    XCTAssertEqual(viewModel.workspaces.count, 1)
+    XCTAssertEqual(viewModel.currentDocument?.url, markdownURL.standardizedFileURL)
+    XCTAssertEqual(
+      viewModel.saveErrorMessage,
+      "当前文稿正在保存，请等待保存完成后再关闭文件夹。"
+    )
+
+    viewModel.dismissSaveError()
+    fileService.finishSave()
+    await waitUntil { !viewModel.isSaving }
+
+    XCTAssertEqual(viewModel.workspaces.count, 1)
+    XCTAssertEqual(viewModel.currentDocument?.content, "# Saved")
+  }
+
+  @MainActor
+  func testDirtyDraftIsPersistedAndSuccessfulSaveClearsRecovery() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    try Data("# Original".utf8).write(to: markdownURL)
+    let recoveryStore = InMemoryDraftRecoveryStore()
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: recoveryStore
+    )
+
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+    viewModel.draftContent = "# Crash-safe draft"
+
+    await waitUntil(timeoutIterations: 150) {
+      recoveryStore.record?.draftContent == "# Crash-safe draft"
+    }
+    let record = try XCTUnwrap(recoveryStore.record)
+    XCTAssertEqual(record.sourceURL, markdownURL.standardizedFileURL)
+    XCTAssertEqual(
+      record.baselineContentDigest,
+      DraftRecoveryRecord.contentDigest("# Original")
+    )
+
+    viewModel.save()
+    await waitUntil { !viewModel.isSaving && !viewModel.hasUnsavedChanges }
+    XCTAssertNil(recoveryStore.record)
+  }
+
+  @MainActor
+  func testRestoresCrashDraftWithoutWritingItToDisk() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    let originalContent = "# Original"
+    let draftContent = "# Recovered draft"
+    try Data(originalContent.utf8).write(to: markdownURL)
+    let document = try LocalFileService().loadDocument(at: markdownURL)
+    let recoveryStore = InMemoryDraftRecoveryStore(
+      record: DraftRecoveryRecord(document: document, draftContent: draftContent)
+    )
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: recoveryStore
+    )
+
+    viewModel.restoreLibraryIfNeeded()
+    await waitUntil { viewModel.draftContent == draftContent }
+
+    XCTAssertEqual(viewModel.currentDocument?.content, originalContent)
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.isEditing)
+    XCTAssertEqual(
+      try String(contentsOf: markdownURL, encoding: .utf8),
+      originalContent
+    )
+    XCTAssertTrue(viewModel.draftRecoveryMessage?.contains("尚未被覆盖") == true)
+  }
+
+  @MainActor
+  func testConcurrentStartupOpenCannotOverwriteRecoveredDraftForSameURL() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    let originalContent = "# Original"
+    let draftContent = "# Recovered draft wins"
+    try Data(originalContent.utf8).write(to: markdownURL)
+    let document = try LocalFileService().loadDocument(at: markdownURL)
+    let recoveryStore = BlockingLoadDraftRecoveryStore(
+      record: DraftRecoveryRecord(document: document, draftContent: draftContent)
+    )
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: recoveryStore
+    )
+
+    viewModel.restoreLibraryIfNeeded()
+    await waitUntil { recoveryStore.loadStarted }
+    viewModel.open(markdownURL)
+    recoveryStore.finishLoad()
+    await waitUntil { viewModel.draftContent == draftContent }
+    try? await Task.sleep(for: .milliseconds(150))
+
+    XCTAssertEqual(viewModel.currentDocument?.url, markdownURL.standardizedFileURL)
+    XCTAssertEqual(viewModel.currentDocument?.content, originalContent)
+    XCTAssertEqual(viewModel.draftContent, draftContent)
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.isEditing)
+  }
+
+  @MainActor
+  func testLateNormalLoadCannotOverwriteRecoveredDraftGeneration() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    let originalContent = "# Original"
+    let draftContent = "# Recovered after racing load"
+    try Data(originalContent.utf8).write(to: markdownURL)
+    let document = try LocalFileService().loadDocument(at: markdownURL)
+    let fileService = BlockingFirstLoadFileService()
+    let viewModel = ReaderViewModel(
+      fileService: fileService,
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(
+        record: DraftRecoveryRecord(document: document, draftContent: draftContent)
+      )
+    )
+
+    viewModel.open(markdownURL)
+    await waitUntil { fileService.firstLoadStarted }
+    viewModel.restoreLibraryIfNeeded()
+    await waitUntil { viewModel.draftContent == draftContent }
+    fileService.finishFirstLoad()
+    try? await Task.sleep(for: .milliseconds(150))
+
+    XCTAssertEqual(viewModel.currentDocument?.content, originalContent)
+    XCTAssertEqual(viewModel.draftContent, draftContent)
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+  }
+
+  func testUITestDraftRecoveryURLIsIsolatedByDocumentID() {
+    let first = LocalDraftRecoveryStore.defaultFileURL(
+      environment: [
+        "FLUX_READER_UI_TESTING": "1",
+        "FLUX_READER_UI_TEST_DOCUMENT_ID": "first/test",
+      ]
+    )
+    let second = LocalDraftRecoveryStore.defaultFileURL(
+      environment: [
+        "FLUX_READER_UI_TESTING": "1",
+        "FLUX_READER_UI_TEST_DOCUMENT_ID": "second",
+      ]
+    )
+    let production = LocalDraftRecoveryStore.defaultFileURL(environment: [:])
+
+    XCTAssertNotEqual(first, second)
+    XCTAssertTrue(first.path.contains("FluxReaderUITests/first-test/Recovery"))
+    XCTAssertTrue(second.path.contains("FluxReaderUITests/second/Recovery"))
+    XCTAssertFalse(production.path.contains("FluxReaderUITests"))
+  }
+
+  func testUITestRetainedRecoveryManifestIsIsolatedByDocumentID() {
+    let first = LocalRetainedFileRecoveryStore.defaultManifestURL(
+      environment: [
+        "FLUX_READER_UI_TESTING": "1",
+        "FLUX_READER_UI_TEST_DOCUMENT_ID": "first/test",
+      ]
+    )
+    let second = LocalRetainedFileRecoveryStore.defaultManifestURL(
+      environment: [
+        "FLUX_READER_UI_TESTING": "1",
+        "FLUX_READER_UI_TEST_DOCUMENT_ID": "second",
+      ]
+    )
+    let production = LocalRetainedFileRecoveryStore.defaultManifestURL(environment: [:])
+
+    XCTAssertNotEqual(first, second)
+    XCTAssertTrue(first.path.contains("FluxReaderUITests/first-test/RecoveryVersions"))
+    XCTAssertTrue(second.path.contains("FluxReaderUITests/second/RecoveryVersions"))
+    XCTAssertFalse(production.path.contains("FluxReaderUITests"))
+  }
+
+  @MainActor
+  func testRestoresCrashDraftAndWarnsWhenDiskChangedExternally() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
+    let originalContent = "# Original"
+    let externalContent = "# External"
+    let draftContent = "# Recovered draft"
+    try Data(originalContent.utf8).write(to: markdownURL)
+    let document = try LocalFileService().loadDocument(at: markdownURL)
+    let recoveryStore = InMemoryDraftRecoveryStore(
+      record: DraftRecoveryRecord(document: document, draftContent: draftContent)
+    )
+    try Data(externalContent.utf8).write(to: markdownURL)
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: recoveryStore
+    )
+
+    viewModel.restoreLibraryIfNeeded()
+    await waitUntil { viewModel.draftContent == draftContent }
+
+    XCTAssertEqual(viewModel.currentDocument?.content, externalContent)
+    XCTAssertEqual(viewModel.draftContent, draftContent)
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertEqual(
+      try String(contentsOf: markdownURL, encoding: .utf8),
+      externalContent
+    )
+    XCTAssertTrue(viewModel.draftRecoveryMessage?.contains("发生了变化") == true)
+  }
+
+  @MainActor
   func testFailedWorkspaceRefreshKeepsPersistedWorkspace() async throws {
     let store = InMemoryBookmarkStore()
     store.workspaceURLs = [temporaryDirectory]
@@ -498,7 +983,8 @@ final class ReaderViewModelTests: XCTestCase {
     let viewModel = ReaderViewModel(
       folderService: folderService,
       bookmarkStore: store,
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.restoreLibraryIfNeeded()
@@ -524,7 +1010,8 @@ final class ReaderViewModelTests: XCTestCase {
     let watcher = TestWorkspaceWatcher()
     let viewModel = ReaderViewModel(
       bookmarkStore: store,
-      workspaceWatcher: watcher
+      workspaceWatcher: watcher,
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.restoreLibraryIfNeeded()
@@ -556,7 +1043,8 @@ final class ReaderViewModelTests: XCTestCase {
     store.workspaceURLs = [temporaryDirectory, nestedURL]
     let viewModel = ReaderViewModel(
       bookmarkStore: store,
-      workspaceWatcher: TestWorkspaceWatcher()
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore()
     )
 
     viewModel.restoreLibraryIfNeeded()
@@ -690,6 +1178,200 @@ private final class BlockingFileService: FileAccessing, @unchecked Sendable {
 
   func finishSave() {
     saveGate.signal()
+  }
+}
+
+private final class BlockingFirstLoadFileService: FileAccessing, @unchecked Sendable {
+  private let base = LocalFileService()
+  private let lock = NSLock()
+  private let firstLoadGate = DispatchSemaphore(value: 0)
+  private var loadCount = 0
+  private var _firstLoadStarted = false
+
+  var firstLoadStarted: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return _firstLoadStarted
+  }
+
+  func loadDocument(at url: URL) throws -> MarkdownDocument {
+    lock.lock()
+    loadCount += 1
+    let shouldBlock = loadCount == 1
+    if shouldBlock { _firstLoadStarted = true }
+    lock.unlock()
+    if shouldBlock { firstLoadGate.wait() }
+    return try base.loadDocument(at: url)
+  }
+
+  func saveDocument(
+    content: String,
+    to url: URL,
+    expectedModificationDate: Date?,
+    expectedContent: String?,
+    expectedTargetExists: Bool
+  ) throws -> MarkdownDocument {
+    try base.saveDocument(
+      content: content,
+      to: url,
+      expectedModificationDate: expectedModificationDate,
+      expectedContent: expectedContent,
+      expectedTargetExists: expectedTargetExists
+    )
+  }
+
+  func finishFirstLoad() {
+    firstLoadGate.signal()
+  }
+}
+
+private final class InMemoryDraftRecoveryStore: DraftRecoveryStoring, @unchecked Sendable {
+  private let lock = NSLock()
+  private var storedRecord: DraftRecoveryRecord?
+
+  init(record: DraftRecoveryRecord? = nil) {
+    storedRecord = record
+  }
+
+  var record: DraftRecoveryRecord? {
+    lock.lock()
+    defer { lock.unlock() }
+    return storedRecord
+  }
+
+  func load() throws -> DraftRecoveryRecord? {
+    record
+  }
+
+  func save(_ record: DraftRecoveryRecord) throws {
+    lock.lock()
+    storedRecord = record
+    lock.unlock()
+  }
+
+  func clear() throws {
+    lock.lock()
+    storedRecord = nil
+    lock.unlock()
+  }
+}
+
+private final class BlockingLoadDraftRecoveryStore: DraftRecoveryStoring, @unchecked Sendable {
+  private let lock = NSLock()
+  private let loadGate = DispatchSemaphore(value: 0)
+  private var storedRecord: DraftRecoveryRecord?
+  private var _loadStarted = false
+
+  init(record: DraftRecoveryRecord?) {
+    storedRecord = record
+  }
+
+  var loadStarted: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return _loadStarted
+  }
+
+  func load() throws -> DraftRecoveryRecord? {
+    lock.lock()
+    _loadStarted = true
+    lock.unlock()
+    loadGate.wait()
+    lock.lock()
+    defer { lock.unlock() }
+    return storedRecord
+  }
+
+  func save(_ record: DraftRecoveryRecord) throws {
+    lock.lock()
+    storedRecord = record
+    lock.unlock()
+  }
+
+  func clear() throws {
+    lock.lock()
+    storedRecord = nil
+    lock.unlock()
+  }
+
+  func finishLoad() {
+    loadGate.signal()
+  }
+}
+
+private final class BlockingClearDraftRecoveryStore:
+  DraftRecoveryStoring, @unchecked Sendable
+{
+  private let lock = NSLock()
+  private let clearGate = DispatchSemaphore(value: 0)
+  private var storedRecord: DraftRecoveryRecord?
+  private var _clearStarted = false
+
+  var record: DraftRecoveryRecord? {
+    lock.lock()
+    defer { lock.unlock() }
+    return storedRecord
+  }
+
+  var clearStarted: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return _clearStarted
+  }
+
+  func load() throws -> DraftRecoveryRecord? {
+    record
+  }
+
+  func save(_ record: DraftRecoveryRecord) throws {
+    lock.lock()
+    storedRecord = record
+    lock.unlock()
+  }
+
+  func clear() throws {
+    lock.lock()
+    _clearStarted = true
+    lock.unlock()
+    clearGate.wait()
+    lock.lock()
+    storedRecord = nil
+    lock.unlock()
+  }
+
+  func finishClear() {
+    clearGate.signal()
+  }
+}
+
+private final class FailingClearDraftRecoveryStore:
+  DraftRecoveryStoring, @unchecked Sendable
+{
+  private let lock = NSLock()
+  private var storedRecord: DraftRecoveryRecord?
+
+  var record: DraftRecoveryRecord? {
+    lock.lock()
+    defer { lock.unlock() }
+    return storedRecord
+  }
+
+  func load() throws -> DraftRecoveryRecord? {
+    record
+  }
+
+  func save(_ record: DraftRecoveryRecord) throws {
+    lock.lock()
+    storedRecord = record
+    lock.unlock()
+  }
+
+  func clear() throws {
+    throw NSError(
+      domain: "FluxReaderTests.DraftRecovery",
+      code: 1,
+      userInfo: [NSLocalizedDescriptionKey: "拒绝清理"]
+    )
   }
 }
 

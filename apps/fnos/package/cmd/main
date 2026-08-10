@@ -69,6 +69,7 @@ do_start() {
 
   SOCKET_PATH="${SOCKET_PATH}" \
   TRIM_APPNAME="${APP_NAME}" \
+  TRIM_PKGVAR="${VAR_DIR}" \
   NODE_ENV=production \
     nohup node "${ENTRY}" >>"${LOG_FILE}" 2>&1 &
 
