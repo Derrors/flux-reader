@@ -168,9 +168,21 @@ final class FluxReaderUITests: XCTestCase {
     ).firstMatch
     XCTAssertTrue(waitUntilHittable(openRecoveryButton, timeout: 5))
     openRecoveryButton.click()
-    XCTAssertTrue(
-      app.staticTexts["flux.recovery-read-only"].waitForExistence(timeout: 8)
-    )
+    let recoveryReadOnlyIndicator = app.staticTexts["flux.recovery-read-only"]
+    let didOpenRecoveryVersion = recoveryReadOnlyIndicator.waitForExistence(timeout: 8)
+    if !didOpenRecoveryVersion {
+      let operationAlert = app.alerts["无法完成文稿操作"]
+      let alertText = operationAlert.staticTexts.allElementsBoundByIndex
+        .compactMap { $0.value as? String }
+        .joined(separator: " | ")
+      let currentDocumentValue =
+        app.staticTexts["flux.current-document"].value as? String ?? "<missing>"
+      XCTFail(
+        "恢复版本未打开；currentDocument=\(currentDocumentValue); "
+          + "operationAlert=\(operationAlert.exists); alertText=\(alertText)"
+      )
+      return
+    }
     XCTAssertFalse(app.buttons["flux.edit"].exists)
     XCTAssertFalse(app.buttons["flux.save"].isEnabled)
 
