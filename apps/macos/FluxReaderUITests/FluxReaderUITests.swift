@@ -75,6 +75,21 @@ final class FluxReaderUITests: XCTestCase {
     XCTAssertTrue(app.wait(for: .runningForeground, timeout: timeout))
   }
 
+  private func enterEditMode(
+    in app: XCUIApplication,
+    timeout: TimeInterval = 8
+  ) -> XCUIElement {
+    let currentDocument = app.staticTexts["flux.current-document"]
+    XCTAssertTrue(currentDocument.waitForExistence(timeout: timeout))
+
+    app.activate()
+    app.typeKey("e", modifierFlags: .command)
+
+    let editor = app.textViews["flux.editor"]
+    XCTAssertTrue(editor.waitForExistence(timeout: timeout))
+    return editor
+  }
+
   private func configureTestDocument(
     _ app: XCUIApplication,
     id: String,
@@ -143,13 +158,7 @@ final class FluxReaderUITests: XCTestCase {
     )
     app.launch()
 
-    let editButton = app.buttons["flux.edit"]
-    XCTAssertTrue(editButton.waitForExistence(timeout: 8))
-    app.activate()
-    app.typeKey("e", modifierFlags: .command)
-
-    let editor = app.textViews["flux.editor"]
-    XCTAssertTrue(editor.waitForExistence(timeout: 8))
+    let editor = enterEditMode(in: app)
     editor.click()
     editor.typeKey("a", modifierFlags: .command)
     editor.typeText("# Saved")
@@ -188,12 +197,7 @@ final class FluxReaderUITests: XCTestCase {
     app.launchEnvironment["FLUX_READER_UI_TEST_FORCE_TERMINATION"] = "1"
     app.launch()
 
-    let editButton = app.buttons["flux.edit"]
-    XCTAssertTrue(editButton.waitForExistence(timeout: 8))
-    app.activate()
-    app.typeKey("e", modifierFlags: .command)
-    let editor = app.textViews["flux.editor"]
-    XCTAssertTrue(editor.waitForExistence(timeout: 8))
+    let editor = enterEditMode(in: app)
     editor.click()
     editor.typeKey("a", modifierFlags: .command)
     editor.typeText("# Recovered after crash")
@@ -235,11 +239,7 @@ final class FluxReaderUITests: XCTestCase {
     )
     app.launchEnvironment["FLUX_READER_UI_TEST_FORCE_TERMINATION"] = "1"
     app.launch()
-    XCTAssertTrue(app.buttons["flux.edit"].waitForExistence(timeout: 8))
-    app.activate()
-    app.typeKey("e", modifierFlags: .command)
-    let editor = app.textViews["flux.editor"]
-    XCTAssertTrue(editor.waitForExistence(timeout: 8))
+    let editor = enterEditMode(in: app)
     editor.click()
     editor.typeKey("a", modifierFlags: .command)
     editor.typeText("# Local recovered draft")
@@ -301,11 +301,7 @@ final class FluxReaderUITests: XCTestCase {
 
     let secondDocument = app.buttons["Second.md"]
     XCTAssertTrue(secondDocument.waitForExistence(timeout: 10))
-    XCTAssertTrue(app.buttons["flux.edit"].waitForExistence(timeout: 8))
-    app.activate()
-    app.typeKey("e", modifierFlags: .command)
-    let editor = app.textViews["flux.editor"]
-    XCTAssertTrue(editor.waitForExistence(timeout: 8))
+    let editor = enterEditMode(in: app)
     editor.click()
     editor.typeText("\nUnsaved")
     let dirtyIndicator = app.staticTexts["flux.dirty-indicator"]
