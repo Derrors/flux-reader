@@ -75,6 +75,21 @@ final class FluxReaderUITests: XCTestCase {
     XCTAssertTrue(app.wait(for: .runningForeground, timeout: timeout))
   }
 
+  private func enterEditMode(
+    in app: XCUIApplication,
+    timeout: TimeInterval = 8
+  ) -> XCUIElement {
+    let currentDocument = app.staticTexts["flux.current-document"]
+    XCTAssertTrue(currentDocument.waitForExistence(timeout: timeout))
+
+    app.activate()
+    app.typeKey("e", modifierFlags: .command)
+
+    let editor = app.textViews["flux.editor"]
+    XCTAssertTrue(editor.waitForExistence(timeout: timeout))
+    return editor
+  }
+
   private func configureTestDocument(
     _ app: XCUIApplication,
     id: String,
@@ -143,13 +158,7 @@ final class FluxReaderUITests: XCTestCase {
     )
     app.launch()
 
-    let editButton = app.buttons["flux.edit"]
-    XCTAssertTrue(editButton.waitForExistence(timeout: 8))
-    app.activate()
-    app.typeKey("e", modifierFlags: .command)
-
-    let editor = app.textViews["flux.editor"]
-    XCTAssertTrue(editor.waitForExistence(timeout: 8))
+    let editor = enterEditMode(in: app)
     editor.click()
     editor.typeKey("a", modifierFlags: .command)
     editor.typeText("# Saved")
@@ -188,12 +197,7 @@ final class FluxReaderUITests: XCTestCase {
     app.launchEnvironment["FLUX_READER_UI_TEST_FORCE_TERMINATION"] = "1"
     app.launch()
 
-    let editButton = app.buttons["flux.edit"]
-    XCTAssertTrue(editButton.waitForExistence(timeout: 8))
-    app.activate()
-    app.typeKey("e", modifierFlags: .command)
-    let editor = app.textViews["flux.editor"]
-    XCTAssertTrue(editor.waitForExistence(timeout: 8))
+    let editor = enterEditMode(in: app)
     editor.click()
     editor.typeKey("a", modifierFlags: .command)
     editor.typeText("# Recovered after crash")
@@ -235,11 +239,7 @@ final class FluxReaderUITests: XCTestCase {
     )
     app.launchEnvironment["FLUX_READER_UI_TEST_FORCE_TERMINATION"] = "1"
     app.launch()
-    XCTAssertTrue(app.buttons["flux.edit"].waitForExistence(timeout: 8))
-    app.activate()
-    app.typeKey("e", modifierFlags: .command)
-    let editor = app.textViews["flux.editor"]
-    XCTAssertTrue(editor.waitForExistence(timeout: 8))
+    let editor = enterEditMode(in: app)
     editor.click()
     editor.typeKey("a", modifierFlags: .command)
     editor.typeText("# Local recovered draft")
@@ -287,7 +287,7 @@ final class FluxReaderUITests: XCTestCase {
     )
   }
 
-  func testDirtySwitchAndQuitBothRequireExplicitDecision() {
+  func testDirtyTabSurvivesSwitchAndQuitRequiresExplicitDecision() {
     let app = makeApplication()
     configureTestDocument(
       app,
@@ -301,11 +301,7 @@ final class FluxReaderUITests: XCTestCase {
 
     let secondDocument = app.buttons["Second.md"]
     XCTAssertTrue(secondDocument.waitForExistence(timeout: 10))
-    XCTAssertTrue(app.buttons["flux.edit"].waitForExistence(timeout: 8))
-    app.activate()
-    app.typeKey("e", modifierFlags: .command)
-    let editor = app.textViews["flux.editor"]
-    XCTAssertTrue(editor.waitForExistence(timeout: 8))
+    let editor = enterEditMode(in: app)
     editor.click()
     editor.typeText("\nUnsaved")
     let dirtyIndicator = app.staticTexts["flux.dirty-indicator"]
@@ -313,9 +309,33 @@ final class FluxReaderUITests: XCTestCase {
 
     XCTAssertTrue(waitUntilHittable(secondDocument, timeout: 5))
     secondDocument.click()
-    let switchCancelButton = app.sheets.buttons["取消"]
-    cancelInteraction(using: switchCancelButton, in: app)
+    let currentDocument = app.staticTexts["flux.current-document"]
+    XCTAssertTrue(
+      waitUntilValue(
+        of: currentDocument,
+        contains: "Second.md",
+        timeout: 5
+      )
+    )
+
+    let firstDocument = app.buttons["FluxReaderUITest.md"]
+    XCTAssertTrue(waitUntilHittable(firstDocument, timeout: 5))
+    firstDocument.click()
+    XCTAssertTrue(
+      waitUntilValue(
+        of: currentDocument,
+        contains: "FluxReaderUITest.md",
+        timeout: 5
+      )
+    )
     XCTAssertTrue(dirtyIndicator.waitForExistence(timeout: 5))
+    XCTAssertTrue(
+      waitUntilValue(
+        of: app.textViews["flux.editor"],
+        contains: "Unsaved",
+        timeout: 5
+      )
+    )
 
     app.typeKey("q", modifierFlags: .command)
     let quitCancelButton = app.dialogs.buttons["取消"]

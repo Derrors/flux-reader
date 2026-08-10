@@ -5,7 +5,7 @@
  *   preprocess(源码) → marked → 净化 HTML → html-react-parser → React
  *   其中代码块被替换为占位 div，在此处换成 <CodeBlock/> 组件。
  */
-import { useMemo } from 'react';
+import { Fragment, useEffect, useMemo } from 'react';
 import parse, { attributesToProps, domToReact, Element } from 'html-react-parser';
 import { preprocess } from './preprocess';
 import { renderToSafeHtml } from './pipeline';
@@ -39,17 +39,56 @@ export default function MarkdownView({
   theme = 'light',
   className = '',
   resolveImageSource,
+  findQuery = '',
+  findCaseSensitive = false,
+  activeFindMatch = 0,
+  onFindMatchCountChange,
 }) {
   const html = useMemo(() => {
     if (!content) return '';
     return renderToSafeHtml(preprocess(content));
   }, [content]);
 
-  const rendered = useMemo(() => {
-    if (!html) return null;
+  const renderResult = useMemo(() => {
+    if (!html) return { content: null, matchCount: 0 };
+
+    let matchIndex = 0;
+    const normalizedQuery = findCaseSensitive ? findQuery : findQuery.toLocaleLowerCase();
+
+    const highlightText = (value) => {
+      if (!normalizedQuery) return undefined;
+      const comparable = findCaseSensitive ? value : value.toLocaleLowerCase();
+      const pieces = [];
+      let offset = 0;
+      while (offset <= comparable.length - normalizedQuery.length) {
+        const index = comparable.indexOf(normalizedQuery, offset);
+        if (index < 0) break;
+        if (index > offset) pieces.push(value.slice(offset, index));
+        const currentIndex = matchIndex;
+        matchIndex += 1;
+        pieces.push(
+          <mark
+            key={`find-${currentIndex}-${index}`}
+            className={`markdown-find-match${
+              currentIndex === activeFindMatch ? ' is-active' : ''
+            }`}
+            data-find-match={currentIndex}
+          >
+            {value.slice(index, index + findQuery.length)}
+          </mark>,
+        );
+        offset = index + normalizedQuery.length;
+      }
+      if (matchIndex === 0 || offset === 0) return undefined;
+      if (offset < value.length) pieces.push(value.slice(offset));
+      return <Fragment>{pieces}</Fragment>;
+    };
 
     const options = {
       replace(node) {
+        if (node.type === 'text' && typeof node.data === 'string') {
+          return highlightText(node.data);
+        }
         if (!(node instanceof Element)) return undefined;
 
         if (node.name === 'img') {
@@ -102,12 +141,23 @@ export default function MarkdownView({
       },
     };
 
-    return parse(html, options);
-  }, [html, resolveImageSource, theme]);
+    const parsed = parse(html, options);
+    return { content: parsed, matchCount: matchIndex };
+  }, [activeFindMatch, findCaseSensitive, findQuery, html, resolveImageSource, theme]);
+
+  useEffect(() => {
+    onFindMatchCountChange?.(renderResult.matchCount);
+  }, [onFindMatchCountChange, renderResult.matchCount]);
+
+  useEffect(() => {
+    if (!findQuery || renderResult.matchCount === 0) return;
+    const selector = `[data-find-match="${activeFindMatch}"]`;
+    document.querySelector(selector)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [activeFindMatch, findQuery, renderResult.matchCount]);
 
   return (
     <div className={`flow-markdown-body ${className}`.trim()}>
-      <div className="markdown-root">{rendered}</div>
+      <div className="markdown-root">{renderResult.content}</div>
     </div>
   );
 }

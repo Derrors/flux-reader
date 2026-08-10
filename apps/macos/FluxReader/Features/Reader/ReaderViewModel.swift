@@ -16,6 +16,38 @@ final class ReaderViewModel: ObservableObject {
     case folders
   }
 
+  enum DocumentViewMode: String, CaseIterable, Identifiable {
+    case preview
+    case edit
+    case split
+
+    var id: Self { self }
+
+    var title: String {
+      switch self {
+      case .preview: "预览"
+      case .edit: "编辑"
+      case .split: "分栏"
+      }
+    }
+
+    var systemImage: String {
+      switch self {
+      case .preview: "eye"
+      case .edit: "pencil"
+      case .split: "rectangle.split.2x1"
+      }
+    }
+  }
+
+  struct DocumentTab: Identifiable, Equatable {
+    let id: URL
+    let displayName: String
+    let path: String
+    let hasUnsavedChanges: Bool
+    let isLoaded: Bool
+  }
+
   struct SaveAsPresentation: Equatable {
     let sourceDocumentURL: URL
     let suggestedDirectoryURL: URL
@@ -36,6 +68,19 @@ final class ReaderViewModel: ObservableObject {
     let content: String?
   }
 
+  private struct OpenDocumentTab {
+    var document: MarkdownDocument
+    var draftContent: String
+    var isEditing: Bool
+    var isSplitView: Bool
+    var retainedRecoveryVersionID: UUID?
+    var access: SecurityScopedAccess?
+    var recoveredDraftBaseline: DraftRecoveryRecord?
+
+    var id: URL { document.url.standardizedFileURL }
+    var hasUnsavedChanges: Bool { draftContent != document.content }
+  }
+
   private enum DraftRecoveryOperationKind: Equatable {
     case persist
     case clear
@@ -54,10 +99,29 @@ final class ReaderViewModel: ObservableObject {
       if draftContent != currentDocument?.content, saveStatusMessage != nil {
         saveStatusMessage = nil
       }
+      recomputeFindMatches()
       scheduleDraftRecoveryPersistence()
+      captureCurrentTab()
+      scheduleDocumentSessionPersistence()
     }
   }
   @Published private(set) var isEditing = false
+  @Published private(set) var isSplitView = false
+  @Published private(set) var documentTabs: [DocumentTab] = []
+  @Published private(set) var activeTabID: URL?
+  @Published var isTabCloseConfirmationPresented = false
+  @Published var isFindPresented = false
+  @Published var isReplacePresented = false
+  @Published var findQuery = "" {
+    didSet { recomputeFindMatches() }
+  }
+  @Published var replaceQuery = ""
+  @Published var findCaseSensitive = false {
+    didSet { recomputeFindMatches() }
+  }
+  @Published private(set) var findMatchCount = 0
+  @Published private(set) var activeFindMatchIndex = 0
+  @Published private(set) var activeFindRange: NSRange?
   @Published private(set) var isSaving = false
   @Published private(set) var saveStatusMessage: String?
   @Published private(set) var saveErrorMessage: String?
@@ -81,6 +145,7 @@ final class ReaderViewModel: ObservableObject {
   private let workspaceWatcher: any WorkspaceWatching
   private let searchService: any WorkspaceSearching
   private let draftRecoveryPersistence: DraftRecoveryPersistence
+  private let documentSessionPersistence: DocumentSessionPersistence
   private let retainedRecoveryStore: any RetainedFileRecoveryStoring
   private var loadTask: Task<Void, Never>?
   private var documentLoadGeneration: UInt64 = 0
@@ -110,6 +175,13 @@ final class ReaderViewModel: ObservableObject {
   private var isApplyingDocumentState = false
   private var retainedRecoverySourceURLsByID: [UUID: URL] = [:]
   private var retainedRecoveryScopeAccessesByID: [UUID: SecurityScopedAccess] = [:]
+  private var openDocumentTabs: [URL: OpenDocumentTab] = [:]
+  private var restoredSessionRecords: [URL: DocumentSessionTabRecord] = [:]
+  private var pendingTabCloseID: URL?
+  private var closesPendingTabAfterSave = false
+  private var documentSessionTask: Task<Void, Never>?
+  private var didAttemptSessionRestore = false
+  private var findMatches: [NSRange] = []
 
   init(
     fileService: (any FileAccessing)? = nil,
@@ -118,6 +190,7 @@ final class ReaderViewModel: ObservableObject {
     workspaceWatcher: any WorkspaceWatching = FSEventWorkspaceWatcher(),
     searchService: any WorkspaceSearching = LocalWorkspaceSearchService(),
     draftRecoveryStore: any DraftRecoveryStoring = LocalDraftRecoveryStore(),
+    documentSessionStore: any DocumentSessionStoring = LocalDocumentSessionStore(),
     retainedRecoveryStore: any RetainedFileRecoveryStoring =
       LocalRetainedFileRecoveryStore()
   ) {
@@ -128,6 +201,7 @@ final class ReaderViewModel: ObservableObject {
     self.workspaceWatcher = workspaceWatcher
     self.searchService = searchService
     self.draftRecoveryPersistence = DraftRecoveryPersistence(store: draftRecoveryStore)
+    self.documentSessionPersistence = DocumentSessionPersistence(store: documentSessionStore)
     self.retainedRecoveryStore = retainedRecoveryStore
   }
 
@@ -160,6 +234,19 @@ final class ReaderViewModel: ObservableObject {
 
   var canSaveAs: Bool {
     currentDocument != nil && !isSaving
+  }
+
+  var documentViewMode: DocumentViewMode {
+    if isSplitView { return .split }
+    return isEditing ? .edit : .preview
+  }
+
+  var hasAnyUnsavedChanges: Bool {
+    hasUnsavedChanges || openDocumentTabs.values.contains(where: { $0.hasUnsavedChanges })
+  }
+
+  var canReplace: Bool {
+    canEdit && !findMatches.isEmpty
   }
 
   var saveAsPresentation: SaveAsPresentation? {
@@ -208,10 +295,10 @@ final class ReaderViewModel: ObservableObject {
 
     refreshRecentDocuments()
     refreshRetainedRecoveryVersions()
-    restoreDraftIfPresent()
 
     #if DEBUG
       if let uiTestDocumentURL {
+        restoreDraftIfPresent()
         loadDocument(
           at: uiTestDocumentURL,
           recordsRecentDocument: false
@@ -219,6 +306,8 @@ final class ReaderViewModel: ObservableObject {
         return
       }
     #endif
+
+    restoreDocumentSessionIfPresent()
 
     let restoredURLs = bookmarkStore.restoreWorkspaces()
     workspaceOrder = restoredURLs.map(\.standardizedFileURL)
@@ -239,7 +328,151 @@ final class ReaderViewModel: ObservableObject {
 
   func toggleEditing() {
     guard canEdit else { return }
-    isEditing.toggle()
+    setDocumentViewMode(isEditing ? .preview : .edit)
+  }
+
+  func setDocumentViewMode(_ mode: DocumentViewMode) {
+    guard currentDocument != nil else { return }
+    if mode != .preview, !canEdit { return }
+    isEditing = mode != .preview
+    isSplitView = mode == .split
+    captureCurrentTab()
+    scheduleDocumentSessionPersistence()
+  }
+
+  func presentFind(replace: Bool = false) {
+    guard currentDocument != nil else { return }
+    isFindPresented = true
+    isReplacePresented = replace && canEdit
+    if replace && documentViewMode == .preview {
+      setDocumentViewMode(.edit)
+    }
+  }
+
+  func dismissFind() {
+    isFindPresented = false
+    isReplacePresented = false
+  }
+
+  func toggleReplace() {
+    guard canEdit else { return }
+    isReplacePresented.toggle()
+    if isReplacePresented && documentViewMode == .preview {
+      setDocumentViewMode(.edit)
+    }
+  }
+
+  func selectNextFindMatch(backward: Bool = false) {
+    guard !findMatches.isEmpty else { return }
+    let delta = backward ? -1 : 1
+    activeFindMatchIndex =
+      (activeFindMatchIndex + delta + findMatches.count) % findMatches.count
+    activeFindRange = findMatches[activeFindMatchIndex]
+  }
+
+  func replaceCurrentFindMatch() {
+    guard canReplace, let range = activeFindRange else { return }
+    let mutable = NSMutableString(string: draftContent)
+    guard NSMaxRange(range) <= mutable.length else { return }
+    mutable.replaceCharacters(in: range, with: replaceQuery)
+    draftContent = mutable as String
+    if !findMatches.isEmpty {
+      activeFindMatchIndex = min(activeFindMatchIndex, findMatches.count - 1)
+      activeFindRange = findMatches[activeFindMatchIndex]
+    }
+  }
+
+  func replaceAllFindMatches() {
+    guard canReplace else { return }
+    let mutable = NSMutableString(string: draftContent)
+    for range in findMatches.reversed() where NSMaxRange(range) <= mutable.length {
+      mutable.replaceCharacters(in: range, with: replaceQuery)
+    }
+    draftContent = mutable as String
+    activeFindMatchIndex = 0
+    activeFindRange = findMatches.first
+  }
+
+  func activateTab(_ id: URL) {
+    let normalizedID = id.standardizedFileURL
+    // A failed lazy session restore can leave the requested tab selected but
+    // not loaded. In that state, selecting it again must retry the load.
+    guard currentDocument?.id != normalizedID else { return }
+    guard !isSaving else {
+      saveErrorMessage = "当前文稿正在保存，请等待保存完成后再切换标签页。"
+      return
+    }
+    captureCurrentTab()
+    if let tab = openDocumentTabs[normalizedID] {
+      applyOpenDocumentTab(tab)
+      return
+    }
+    guard let record = restoredSessionRecords[normalizedID] else { return }
+    loadDocument(
+      at: resolvedSessionURL(record),
+      recordsRecentDocument: false,
+      sessionRecord: record
+    )
+  }
+
+  func requestCloseTab(_ id: URL) {
+    let normalizedID = id.standardizedFileURL
+    guard let tab = documentTabs.first(where: { $0.id == normalizedID }) else { return }
+    guard !isSaving else {
+      saveErrorMessage = "当前文稿正在保存，请等待保存完成后再关闭标签页。"
+      return
+    }
+    if normalizedID != activeTabID {
+      // A clean background tab can be removed without disrupting the active
+      // document. Dirty tabs are activated first so save/discard decisions
+      // always apply to the document the user can see.
+      if !tab.hasUnsavedChanges {
+        closeTabImmediately(normalizedID)
+        return
+      }
+      pendingTabCloseID = normalizedID
+      activateTab(normalizedID)
+      if activeTabID == normalizedID, currentDocument != nil {
+        isTabCloseConfirmationPresented = true
+      }
+      return
+    }
+    guard activeTabID == normalizedID else { return }
+    if hasUnsavedChanges {
+      pendingTabCloseID = normalizedID
+      isTabCloseConfirmationPresented = true
+    } else {
+      closeTabImmediately(normalizedID)
+    }
+  }
+
+  func closeActiveTab() {
+    guard let activeTabID else { return }
+    requestCloseTab(activeTabID)
+  }
+
+  func saveAndClosePendingTab() {
+    guard pendingTabCloseID == activeTabID else {
+      cancelPendingTabClose()
+      return
+    }
+    isTabCloseConfirmationPresented = false
+    closesPendingTabAfterSave = true
+    save()
+  }
+
+  func discardAndClosePendingTab() {
+    guard let id = pendingTabCloseID else { return }
+    isTabCloseConfirmationPresented = false
+    closesPendingTabAfterSave = false
+    clearDraftRecoveryNow()
+    closeTabImmediately(id)
+  }
+
+  func cancelPendingTabClose() {
+    isTabCloseConfirmationPresented = false
+    pendingTabCloseID = nil
+    closesPendingTabAfterSave = false
   }
 
   func save() {
@@ -388,7 +621,35 @@ final class ReaderViewModel: ObservableObject {
 
   @discardableResult
   func discardChangesForTermination() -> Bool {
-    clearDraftRecoveryNow()
+    if let document = currentDocument {
+      isApplyingDocumentState = true
+      draftContent = document.content
+      isApplyingDocumentState = false
+      captureCurrentTab()
+    }
+    guard clearDraftRecoveryNow() else { return false }
+    return persistSessionForTermination()
+  }
+
+  @discardableResult
+  func persistSessionForTermination() -> Bool {
+    captureCurrentTab()
+    documentSessionTask?.cancel()
+    documentSessionTask = nil
+    let record = makeDocumentSessionRecord()
+    let generation = documentSessionPersistence.advanceGeneration()
+    do {
+      if record.tabs.isEmpty {
+        try documentSessionPersistence.clear(generation: generation)
+      } else {
+        try documentSessionPersistence.save(record, generation: generation)
+      }
+      return true
+    } catch {
+      draftRecoveryMessage =
+        "无法保存标签页会话，已取消退出以避免丢失未保存内容：\(error.localizedDescription)"
+      return false
+    }
   }
 
   func retryDraftRecoveryCleanup() {
@@ -550,10 +811,38 @@ final class ReaderViewModel: ObservableObject {
     preservesEditingState: Bool = false,
     retainedRecoveryVersionID: UUID? = nil
   ) {
+    let normalizedURL = url.standardizedFileURL
     if !allowsReloadingCurrentDocument,
-      currentDocument?.url.standardizedFileURL == url.standardizedFileURL
+      currentDocument?.url.standardizedFileURL == normalizedURL
     {
       return
+    }
+
+    if !allowsReloadingCurrentDocument {
+      if let loadedTab = openDocumentTabs[normalizedURL] {
+        guard !isSaving else {
+          saveErrorMessage = "当前文稿正在保存，请等待保存完成后再切换标签页。"
+          return
+        }
+        captureCurrentTab()
+        applyOpenDocumentTab(loadedTab)
+        return
+      }
+      if let restoredRecord = restoredSessionRecords[normalizedURL] {
+        guard !isSaving else {
+          saveErrorMessage = "当前文稿正在保存，请等待保存完成后再切换标签页。"
+          return
+        }
+        captureCurrentTab()
+        loadDocument(
+          at: resolvedSessionURL(restoredRecord),
+          recordsRecentDocument: recordsRecentDocument,
+          preferredResourceRootURL: preferredResourceRootURL,
+          retainedRecoveryVersionID: retainedRecoveryVersionID,
+          sessionRecord: restoredRecord
+        )
+        return
+      }
     }
 
     let request = PendingDocumentOpen(
@@ -565,8 +854,28 @@ final class ReaderViewModel: ObservableObject {
     )
 
     if isSaving {
-      pendingDocumentOpen = request
-      opensPendingDocumentAfterSave = true
+      saveErrorMessage = "当前文稿正在保存，请等待保存完成后再打开其他文稿。"
+      return
+    }
+
+    let opensDifferentDocument = currentDocument?.url.standardizedFileURL != normalizedURL
+    if opensDifferentDocument {
+      let isKnownTab =
+        openDocumentTabs[normalizedURL] != nil
+        || restoredSessionRecords[normalizedURL] != nil
+      if !isKnownTab, documentTabs.count >= DocumentSessionRecord.maximumTabCount {
+        saveErrorMessage =
+          "最多同时打开 \(DocumentSessionRecord.maximumTabCount) 个文稿，请先关闭一个标签页。"
+        return
+      }
+      captureCurrentTab()
+      loadDocument(
+        at: url,
+        recordsRecentDocument: recordsRecentDocument,
+        preferredResourceRootURL: preferredResourceRootURL,
+        preservesEditingState: preservesEditingState,
+        retainedRecoveryVersionID: retainedRecoveryVersionID
+      )
       return
     }
 
@@ -603,7 +912,8 @@ final class ReaderViewModel: ObservableObject {
     recordsRecentDocument: Bool,
     preferredResourceRootURL: URL? = nil,
     preservesEditingState: Bool = false,
-    retainedRecoveryVersionID: UUID? = nil
+    retainedRecoveryVersionID: UUID? = nil,
+    sessionRecord: DocumentSessionTabRecord? = nil
   ) {
     guard MarkdownDocument.supports(url) else {
       phase = .failure(
@@ -628,6 +938,7 @@ final class ReaderViewModel: ObservableObject {
       ? currentDocumentAccess ?? SecurityScopedAccess(url: url)
       : SecurityScopedAccess(url: url)
     let candidateURL = candidateAccess.url
+    let fallbackTabID = currentDocument?.id
     if recordsRecentDocument { recordRecentDocument(url) }
     loadTask?.cancel()
     documentLoadGeneration &+= 1
@@ -659,7 +970,8 @@ final class ReaderViewModel: ObservableObject {
           document.withResourceRoot(resourceRootURL),
           access: candidateAccess,
           isEditing: editingState,
-          retainedRecoveryVersionID: retainedRecoveryVersionID
+          retainedRecoveryVersionID: retainedRecoveryVersionID,
+          sessionRecord: sessionRecord
         )
       } catch {
         guard
@@ -667,7 +979,18 @@ final class ReaderViewModel: ObservableObject {
           self?.documentLoadGeneration == loadGeneration
         else { return }
         self?.activeDocumentLoad = nil
-        self?.phase = .failure(error.localizedDescription)
+        if self?.pendingTabCloseID == (sessionRecord?.id ?? url.standardizedFileURL) {
+          self?.pendingTabCloseID = nil
+        }
+        if let self,
+          let fallbackTabID,
+          let fallback = self.openDocumentTabs[fallbackTabID]
+        {
+          self.applyOpenDocumentTab(fallback)
+          self.saveErrorMessage = error.localizedDescription
+        } else {
+          self?.phase = .failure(error.localizedDescription)
+        }
       }
     }
   }
@@ -676,7 +999,8 @@ final class ReaderViewModel: ObservableObject {
     _ document: MarkdownDocument,
     access: SecurityScopedAccess?,
     isEditing: Bool = false,
-    retainedRecoveryVersionID: UUID? = nil
+    retainedRecoveryVersionID: UUID? = nil,
+    sessionRecord: DocumentSessionTabRecord? = nil
   ) {
     isApplyingDocumentState = true
     defer { isApplyingDocumentState = false }
@@ -685,10 +1009,310 @@ final class ReaderViewModel: ObservableObject {
     currentRetainedRecoveryVersionID = retainedRecoveryVersionID
     currentDocumentAccess = access
     phase = .loaded(document)
-    draftContent = document.content
-    self.isEditing = isEditing && retainedRecoveryVersionID == nil
+    let restoredDraft = sessionRecord?.draftContent
+    draftContent = restoredDraft ?? document.content
+    self.isEditing = (sessionRecord?.isEditing ?? isEditing) && retainedRecoveryVersionID == nil
+    self.isSplitView = (sessionRecord?.isSplitView ?? false) && retainedRecoveryVersionID == nil
+    activeTabID = document.id
+    let tab = OpenDocumentTab(
+      document: document,
+      draftContent: draftContent,
+      isEditing: self.isEditing,
+      isSplitView: self.isSplitView,
+      retainedRecoveryVersionID: retainedRecoveryVersionID,
+      access: access,
+      recoveredDraftBaseline: nil
+    )
+    openDocumentTabs[tab.id] = tab
+    if let sessionRecord, pendingTabCloseID == sessionRecord.id {
+      pendingTabCloseID = tab.id
+    }
+    if let sessionRecord {
+      restoredSessionRecords.removeValue(forKey: sessionRecord.id)
+    }
+    restoredSessionRecords.removeValue(forKey: tab.id)
+    publishDocumentTabs()
+    scheduleDocumentSessionPersistence()
     saveStatusMessage = nil
     saveErrorMessage = nil
+    if let sessionRecord, let restoredDraft, restoredDraft != document.content {
+      draftRecoveryMessage =
+        sessionRecord.baselineMatches(document)
+        ? "已恢复上次会话中未保存的草稿；磁盘文件尚未被覆盖。"
+        : "已恢复未保存的标签页草稿，但磁盘版本已变化。请比较后再保存或另存为。"
+    }
+    if pendingTabCloseID == tab.id, tab.hasUnsavedChanges {
+      isTabCloseConfirmationPresented = true
+    }
+  }
+
+  private func recomputeFindMatches() {
+    let query = findQuery
+    guard !query.isEmpty else {
+      findMatches = []
+      findMatchCount = 0
+      activeFindMatchIndex = 0
+      activeFindRange = nil
+      return
+    }
+
+    let source = draftContent as NSString
+    let options: NSString.CompareOptions = findCaseSensitive ? [] : [.caseInsensitive]
+    var matches: [NSRange] = []
+    var searchRange = NSRange(location: 0, length: source.length)
+    while searchRange.length > 0 {
+      let match = source.range(of: query, options: options, range: searchRange)
+      guard match.location != NSNotFound, match.length > 0 else { break }
+      matches.append(match)
+      let nextLocation = NSMaxRange(match)
+      searchRange = NSRange(location: nextLocation, length: source.length - nextLocation)
+    }
+    findMatches = matches
+    findMatchCount = matches.count
+    activeFindMatchIndex =
+      matches.isEmpty
+      ? 0 : min(activeFindMatchIndex, matches.count - 1)
+    activeFindRange = matches.isEmpty ? nil : matches[activeFindMatchIndex]
+  }
+
+  private func captureCurrentTab() {
+    guard !isApplyingDocumentState, let document = currentDocument else { return }
+    let id = document.id
+    openDocumentTabs[id] = OpenDocumentTab(
+      document: document,
+      draftContent: draftContent,
+      isEditing: isEditing,
+      isSplitView: isSplitView,
+      retainedRecoveryVersionID: currentRetainedRecoveryVersionID,
+      access: currentDocumentAccess,
+      recoveredDraftBaseline: recoveredDraftBaseline
+    )
+    activeTabID = id
+    publishDocumentTabs()
+  }
+
+  private func applyOpenDocumentTab(_ tab: OpenDocumentTab) {
+    documentLoadGeneration &+= 1
+    loadTask?.cancel()
+    isApplyingDocumentState = true
+    defer { isApplyingDocumentState = false }
+    documentSessionID = UUID()
+    activeTabID = tab.id
+    currentDocumentAccess = tab.access
+    currentRetainedRecoveryVersionID = tab.retainedRecoveryVersionID
+    recoveredDraftBaseline = tab.recoveredDraftBaseline
+    phase = .loaded(tab.document)
+    draftContent = tab.draftContent
+    isEditing = tab.isEditing
+    isSplitView = tab.isSplitView
+    saveStatusMessage = nil
+    saveErrorMessage = nil
+    activeFindMatchIndex = 0
+    recomputeFindMatches()
+    publishDocumentTabs()
+    scheduleDocumentSessionPersistence()
+  }
+
+  private func publishDocumentTabs() {
+    var orderedIDs = documentTabs.map(\.id).filter {
+      openDocumentTabs[$0] != nil || restoredSessionRecords[$0] != nil
+    }
+    for id in openDocumentTabs.keys where !orderedIDs.contains(id) {
+      orderedIDs.append(id)
+    }
+    for id in restoredSessionRecords.keys where !orderedIDs.contains(id) {
+      orderedIDs.append(id)
+    }
+    documentTabs = Array(orderedIDs.prefix(DocumentSessionRecord.maximumTabCount)).compactMap {
+      id in
+      if let tab = openDocumentTabs[id] {
+        return DocumentTab(
+          id: id,
+          displayName: tab.document.displayName,
+          path: tab.document.url.path(percentEncoded: false),
+          hasUnsavedChanges: tab.hasUnsavedChanges,
+          isLoaded: true
+        )
+      }
+      if let record = restoredSessionRecords[id] {
+        return DocumentTab(
+          id: id,
+          displayName: record.sourceURL.lastPathComponent,
+          path: record.sourceURL.path(percentEncoded: false),
+          hasUnsavedChanges: record.hasUnsavedChanges,
+          isLoaded: false
+        )
+      }
+      return nil
+    }
+  }
+
+  private func closeTabImmediately(_ id: URL) {
+    let normalizedID = id.standardizedFileURL
+    let index = documentTabs.firstIndex(where: { $0.id == normalizedID }) ?? 0
+    openDocumentTabs.removeValue(forKey: normalizedID)
+    restoredSessionRecords.removeValue(forKey: normalizedID)
+    pendingTabCloseID = nil
+    isTabCloseConfirmationPresented = false
+    closesPendingTabAfterSave = false
+    publishDocumentTabs()
+
+    guard activeTabID == normalizedID else {
+      persistDocumentSessionNow()
+      return
+    }
+    clearDraftRecoveryNow()
+    guard !documentTabs.isEmpty else {
+      isApplyingDocumentState = true
+      phase = .empty
+      draftContent = ""
+      isEditing = false
+      isSplitView = false
+      activeTabID = nil
+      currentDocumentAccess = nil
+      currentRetainedRecoveryVersionID = nil
+      recoveredDraftBaseline = nil
+      isApplyingDocumentState = false
+      dismissFind()
+      persistDocumentSessionNow()
+      return
+    }
+
+    let nextTab = documentTabs[min(index, documentTabs.count - 1)]
+    if let loaded = openDocumentTabs[nextTab.id] {
+      applyOpenDocumentTab(loaded)
+    } else if let record = restoredSessionRecords[nextTab.id] {
+      loadDocument(
+        at: resolvedSessionURL(record),
+        recordsRecentDocument: false,
+        sessionRecord: record
+      )
+    }
+    persistDocumentSessionNow()
+  }
+
+  private func resolvedSessionURL(_ record: DocumentSessionTabRecord) -> URL {
+    (try? record.resolvedSourceURL()) ?? record.sourceURL.standardizedFileURL
+  }
+
+  private func makeDocumentSessionRecord() -> DocumentSessionRecord {
+    var snapshots = openDocumentTabs
+    if let document = currentDocument {
+      snapshots[document.id] = OpenDocumentTab(
+        document: document,
+        draftContent: draftContent,
+        isEditing: isEditing,
+        isSplitView: isSplitView,
+        retainedRecoveryVersionID: currentRetainedRecoveryVersionID,
+        access: currentDocumentAccess,
+        recoveredDraftBaseline: recoveredDraftBaseline
+      )
+    }
+    let records = documentTabs.compactMap { tab -> DocumentSessionTabRecord? in
+      if let snapshot = snapshots[tab.id] {
+        return DocumentSessionTabRecord(
+          document: snapshot.document,
+          draftContent: snapshot.draftContent,
+          isEditing: snapshot.isEditing,
+          isSplitView: snapshot.isSplitView
+        )
+      }
+      return restoredSessionRecords[tab.id]
+    }
+    return DocumentSessionRecord(tabs: records, activeTabURL: activeTabID)
+  }
+
+  private func scheduleDocumentSessionPersistence() {
+    guard !isApplyingDocumentState, didAttemptSessionRestore else { return }
+    queueDocumentSessionPersistence(delay: .milliseconds(350))
+  }
+
+  private func persistDocumentSessionNow() {
+    guard didAttemptSessionRestore else { return }
+    queueDocumentSessionPersistence(delay: .zero)
+  }
+
+  private func queueDocumentSessionPersistence(delay: Duration) {
+    documentSessionTask?.cancel()
+    let record = makeDocumentSessionRecord()
+    let persistence = documentSessionPersistence
+    let generation = persistence.advanceGeneration()
+    documentSessionTask = Task { [weak self] in
+      do {
+        if delay != .zero { try await Task.sleep(for: delay) }
+        try Task.checkCancellation()
+        let errorMessage = await Task.detached(priority: .utility) {
+          do {
+            if record.tabs.isEmpty {
+              try persistence.clear(generation: generation)
+            } else {
+              try persistence.save(record, generation: generation)
+            }
+            return nil as String?
+          } catch {
+            return error.localizedDescription
+          }
+        }.value
+        guard let self, !Task.isCancelled else { return }
+        if let errorMessage {
+          self.draftRecoveryMessage =
+            "无法更新标签页会话；当前内容仍在窗口中：\(errorMessage)"
+        }
+      } catch {
+        return
+      }
+    }
+  }
+
+  private func restoreDocumentSessionIfPresent() {
+    guard !didAttemptSessionRestore else { return }
+    didAttemptSessionRestore = true
+    let persistence = documentSessionPersistence
+    Task { [weak self] in
+      let result = await Task.detached(priority: .utility) {
+        Result { try persistence.load() }
+      }.value
+      guard let self else { return }
+      guard self.currentDocument == nil else {
+        self.restoreDraftIfPresent()
+        return
+      }
+      switch result {
+      case .success(let record?):
+        let uniqueRecords = record.tabs.reduce(into: [URL: DocumentSessionTabRecord]()) {
+          partial, tab in
+          if partial[tab.id] == nil { partial[tab.id] = tab }
+        }
+        self.restoredSessionRecords = uniqueRecords
+        self.documentTabs = record.tabs.compactMap { tab in
+          guard uniqueRecords[tab.id] != nil else { return nil }
+          return DocumentTab(
+            id: tab.id,
+            displayName: tab.sourceURL.lastPathComponent,
+            path: tab.sourceURL.path(percentEncoded: false),
+            hasUnsavedChanges: tab.hasUnsavedChanges,
+            isLoaded: false
+          )
+        }
+        let activeID = record.activeTabURL ?? self.documentTabs.first?.id
+        self.activeTabID = activeID
+        if let activeID, let activeRecord = uniqueRecords[activeID] {
+          self.loadDocument(
+            at: self.resolvedSessionURL(activeRecord),
+            recordsRecentDocument: false,
+            sessionRecord: activeRecord
+          )
+        } else {
+          self.restoreDraftIfPresent()
+        }
+      case .success(nil):
+        self.restoreDraftIfPresent()
+      case .failure(let error):
+        self.draftRecoveryMessage =
+          "无法恢复上次标签页会话，仍将尝试恢复活动草稿：\(error.localizedDescription)"
+        self.restoreDraftIfPresent()
+      }
+    }
   }
 
   private func scheduleDraftRecoveryPersistence() {
@@ -956,6 +1580,19 @@ final class ReaderViewModel: ObservableObject {
     phase = .loaded(document)
     draftContent = record.draftContent
     isEditing = true
+    isSplitView = false
+    activeTabID = document.id
+    openDocumentTabs[document.id] = OpenDocumentTab(
+      document: document,
+      draftContent: record.draftContent,
+      isEditing: true,
+      isSplitView: false,
+      retainedRecoveryVersionID: nil,
+      access: access,
+      recoveredDraftBaseline: record
+    )
+    publishDocumentTabs()
+    scheduleDocumentSessionPersistence()
     saveStatusMessage = nil
     saveErrorMessage = nil
     isApplyingDocumentState = false
@@ -1040,6 +1677,11 @@ final class ReaderViewModel: ObservableObject {
         self.currentRetainedRecoveryVersionID = nil
         self.currentDocumentAccess = savedAccess
         self.phase = .loaded(savedWithResourceRoot)
+        if savedURL != sourceURL {
+          self.openDocumentTabs.removeValue(forKey: sourceURL)
+          self.restoredSessionRecords.removeValue(forKey: sourceURL)
+        }
+        self.activeTabID = savedURL
         if draftAfterSave == contentToSave {
           self.draftContent = savedDocument.content
           self.saveStatusMessage = "已保存"
@@ -1058,6 +1700,9 @@ final class ReaderViewModel: ObservableObject {
         self.saveOperationID = nil
         self.saveTask = nil
         self.refreshRetainedRecoveryVersions()
+        self.captureCurrentTab()
+        self.publishDocumentTabs()
+        self.persistDocumentSessionNow()
 
         if savedURL != sourceURL {
           self.recordRecentDocument(savedDocument.url)
@@ -1071,6 +1716,14 @@ final class ReaderViewModel: ObservableObject {
             self.openPendingDocument()
           }
         }
+        if self.closesPendingTabAfterSave {
+          self.closesPendingTabAfterSave = false
+          if self.hasUnsavedChanges {
+            self.isTabCloseConfirmationPresented = true
+          } else if let pendingID = self.pendingTabCloseID {
+            self.closeTabImmediately(pendingID)
+          }
+        }
       } catch {
         guard !Task.isCancelled, let self, saveOperationID == operationID else { return }
         isSaving = false
@@ -1082,6 +1735,10 @@ final class ReaderViewModel: ObservableObject {
         if opensPendingDocumentAfterSave {
           opensPendingDocumentAfterSave = false
           isUnsavedChangesConfirmationPresented = true
+        }
+        if closesPendingTabAfterSave {
+          closesPendingTabAfterSave = false
+          isTabCloseConfirmationPresented = true
         }
       }
     }

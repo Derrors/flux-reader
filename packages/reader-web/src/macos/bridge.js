@@ -3,6 +3,9 @@ export const DEFAULT_RENDER_PAYLOAD = Object.freeze({
   title: 'Flux Reader',
   theme: 'light',
   resourceToken: '',
+  findQuery: '',
+  findCaseSensitive: false,
+  activeFindMatch: 0,
 });
 
 const LOCAL_RESOURCE_SCHEME = 'flux-reader-resource';
@@ -31,5 +34,10 @@ export function normalizeRenderPayload(value) {
     theme: value.theme === 'dark' ? 'dark' : 'light',
     resourceToken:
       typeof value.resourceToken === 'string' ? value.resourceToken.slice(0, 128) : '',
+    findQuery: typeof value.findQuery === 'string' ? value.findQuery.slice(0, 4_096) : '',
+    findCaseSensitive: value.findCaseSensitive === true,
+    activeFindMatch: Number.isSafeInteger(value.activeFindMatch) && value.activeFindMatch >= 0
+      ? value.activeFindMatch
+      : 0,
   };
 }

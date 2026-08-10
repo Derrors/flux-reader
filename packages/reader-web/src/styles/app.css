@@ -110,6 +110,97 @@ button.icon-btn { border: none; font-size: 16px; padding: 4px 8px; }
 }
 .app-header-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
+.view-mode-control {
+  display: inline-flex;
+  border: 1px solid var(--f-border-l1);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.view-mode-control button {
+  border: 0;
+  border-radius: 0;
+  padding-inline: 8px;
+}
+.view-mode-control button + button { border-left: 1px solid var(--f-border-l1); }
+.view-mode-control button.is-active {
+  color: var(--f-accent);
+  background: var(--f-accent-soft);
+}
+
+.document-tabs {
+  display: flex;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 3px 8px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--f-border-l1);
+  background: var(--f-bg-secondary);
+}
+.document-tab {
+  display: flex;
+  align-items: center;
+  min-width: 132px;
+  max-width: 240px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+}
+.document-tab.is-active {
+  border-color: var(--f-border-l1);
+  background: var(--f-bg-base);
+}
+.document-tab-select,
+.document-tab-close {
+  border: 0;
+  background: transparent;
+}
+.document-tab-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 4px 6px 9px;
+}
+.document-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.document-tab-dirty { color: var(--f-accent); font-size: 8px; }
+.document-tab-close { padding: 4px 7px; font-size: 15px; }
+
+.document-find-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--f-border-l1);
+  background: var(--f-bg-secondary);
+}
+.find-toggle-replace { width: 28px; padding-inline: 0; }
+.find-fields { display: grid; gap: 5px; width: min(680px, calc(100% - 36px)); }
+.find-row { display: flex; align-items: center; gap: 5px; }
+.find-row input {
+  min-width: 160px;
+  flex: 1;
+  border: 1px solid var(--f-border-l1);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--f-text-primary);
+  background: var(--f-bg-base);
+  outline: none;
+}
+.find-row input:focus { border-color: var(--f-accent); }
+.find-row button.is-active { color: var(--f-accent); background: var(--f-accent-soft); }
+.find-result-count {
+  min-width: 58px;
+  color: var(--f-text-tertiary);
+  font-size: 11.5px;
+  text-align: center;
+}
+
 .app-body { display: flex; flex: 1; min-height: 0; }
 
 .app-sidebar {
@@ -126,6 +217,12 @@ button.icon-btn { border: none; font-size: 16px; padding: 4px 8px; }
   min-width: 0;
   overflow-y: auto;
   padding: 24px 32px 80px;
+}
+.app-main.is-split {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 16px 18px 18px;
 }
 
 .app-toc {
@@ -346,6 +443,49 @@ button.icon-btn { border: none; font-size: 16px; padding: 4px 8px; }
 .markdown-editor:focus {
   border-color: var(--f-accent);
   box-shadow: 0 0 0 2px var(--f-accent-soft);
+}
+
+.document-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--f-border-l1);
+  border-radius: var(--f-radius);
+  overflow: hidden;
+}
+.document-split-pane { min-width: 0; min-height: 0; }
+.editor-pane { border-right: 1px solid var(--f-border-l1); }
+.preview-pane { overflow: auto; padding: 18px 22px 56px; }
+.markdown-editor.split-editor {
+  height: 100%;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.markdown-find-match {
+  color: inherit;
+  background: #fde68a;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.markdown-find-match.is-active {
+  color: #111827;
+  background: #f59e0b;
+  outline: 2px solid color-mix(in srgb, var(--f-accent) 45%, transparent);
+}
+[data-theme='dark'] .markdown-find-match { background: #854d0e; }
+[data-theme='dark'] .markdown-find-match.is-active {
+  color: #fff;
+  background: #b45309;
+}
+
+@media (max-width: 900px) {
+  .document-split { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+  .editor-pane { border-right: 0; border-bottom: 1px solid var(--f-border-l1); }
 }
 
 .dialog-backdrop {

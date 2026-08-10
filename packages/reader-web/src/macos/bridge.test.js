@@ -13,12 +13,18 @@ describe('macOS 渲染 bridge', () => {
         title: 'guide.md',
         theme: 'dark',
         resourceToken: 'doc-1',
+        findQuery: 'alpha',
+        findCaseSensitive: true,
+        activeFindMatch: 2,
       }),
     ).toEqual({
       content: '# 标题',
       title: 'guide.md',
       theme: 'dark',
       resourceToken: 'doc-1',
+      findQuery: 'alpha',
+      findCaseSensitive: true,
+      activeFindMatch: 2,
     });
   });
 
@@ -27,6 +33,18 @@ describe('macOS 渲染 bridge', () => {
       normalizeRenderPayload({ content: 42, title: '   ', theme: 'sepia' }),
     ).toEqual(DEFAULT_RENDER_PAYLOAD);
     expect(normalizeRenderPayload(null)).toEqual(DEFAULT_RENDER_PAYLOAD);
+  });
+
+  it('限制查找载荷长度并拒绝非法活动匹配序号', () => {
+    const normalized = normalizeRenderPayload({
+      findQuery: 'x'.repeat(5_000),
+      findCaseSensitive: 'true',
+      activeFindMatch: -1,
+    });
+
+    expect(normalized.findQuery).toHaveLength(4_096);
+    expect(normalized.findCaseSensitive).toBe(false);
+    expect(normalized.activeFindMatch).toBe(0);
   });
 
   it('把相对图片映射到隔离的原生资源 scheme', () => {
