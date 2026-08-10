@@ -21,7 +21,6 @@ struct ReaderView: View {
           if viewModel.isViewingRetainedRecoveryVersion {
             Label("恢复版本（只读）", systemImage: "lock.fill")
               .help("恢复版本只能查看；如需继续处理，请使用“另存为”创建新文稿")
-              .accessibilityIdentifier("flux.recovery-read-only")
           } else {
             Button {
               viewModel.toggleEditing()
@@ -508,16 +507,34 @@ struct ReaderView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     case .loaded(let document):
-      if viewModel.isEditing {
-        MarkdownEditorView(
-          content: $viewModel.draftContent,
-          document: document,
-          hasUnsavedChanges: viewModel.hasUnsavedChanges,
-          isSaving: viewModel.isSaving,
-          statusMessage: viewModel.saveStatusMessage
-        )
-      } else if let previewDocument = viewModel.previewDocument {
-        MarkdownRendererView(document: previewDocument)
+      VStack(spacing: 0) {
+        if viewModel.isViewingRetainedRecoveryVersion {
+          HStack(spacing: 8) {
+            Label("保存恢复版本（只读）", systemImage: "lock.fill")
+              .font(.callout.weight(.semibold))
+              .accessibilityIdentifier("flux.recovery-read-only")
+            Text("如需继续处理，请使用“另存为”创建新文稿。")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+          }
+          .padding(.horizontal, 16)
+          .padding(.vertical, 10)
+          .background(.bar)
+          Divider()
+        }
+
+        if viewModel.isEditing {
+          MarkdownEditorView(
+            content: $viewModel.draftContent,
+            document: document,
+            hasUnsavedChanges: viewModel.hasUnsavedChanges,
+            isSaving: viewModel.isSaving,
+            statusMessage: viewModel.saveStatusMessage
+          )
+        } else if let previewDocument = viewModel.previewDocument {
+          MarkdownRendererView(document: previewDocument)
+        }
       }
     case .failure(let message):
       VStack(spacing: 16) {
