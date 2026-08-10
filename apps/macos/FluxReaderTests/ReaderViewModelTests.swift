@@ -112,6 +112,11 @@ final class ReaderViewModelTests: XCTestCase {
     let normalURL = sourceDirectory.appendingPathComponent("normal.md")
     try Data("# Recovery".utf8).write(to: recoveryURL)
     try Data("# Normal".utf8).write(to: normalURL)
+    let mismatchedRecoveryBookmark = try normalURL.bookmarkData(
+      options: .minimalBookmark,
+      includingResourceValuesForKeys: nil,
+      relativeTo: nil
+    )
     let viewModel = ReaderViewModel(
       bookmarkStore: InMemoryBookmarkStore(),
       workspaceWatcher: TestWorkspaceWatcher(),
@@ -122,7 +127,7 @@ final class ReaderViewModelTests: XCTestCase {
       sourceURL: normalURL,
       sourceBookmark: nil,
       recoveryURL: recoveryURL,
-      recoveryBookmark: Data("invalid bookmark".utf8),
+      recoveryBookmark: mismatchedRecoveryBookmark,
       byteCount: Data("# Recovery".utf8).count,
       contentDigest: "recovery",
       state: .retained

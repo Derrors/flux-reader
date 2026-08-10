@@ -109,6 +109,7 @@ final class ReaderViewModel: ObservableObject {
   private var recoveredDraftBaseline: DraftRecoveryRecord?
   private var isApplyingDocumentState = false
   private var retainedRecoverySourceURLsByID: [UUID: URL] = [:]
+  private var retainedRecoveryScopeAccessesByID: [UUID: SecurityScopedAccess] = [:]
 
   init(
     fileService: (any FileAccessing)? = nil,
@@ -332,29 +333,27 @@ final class ReaderViewModel: ObservableObject {
 
   func openRetainedRecoveryVersion(_ version: RetainedFileRecoveryVersion) {
     Task { [weak self] in
-      do {
-        let urls = try await Task.detached(priority: .userInitiated) {
-          // A security-scoped bookmark can become stale across ad-hoc builds,
-          // app updates, or restored test containers. The durable manifest URL
-          // is still safe to try: LocalFileService performs its normal file and
-          // symlink validation, and sandbox access remains fail-closed.
-          let recoveryURL =
-            (try? version.resolvedRecoveryURL())
-            ?? version.recoveryURL.standardizedFileURL
-          let sourceURL =
-            (try? version.resolvedSourceURL()) ?? version.sourceURL.standardizedFileURL
-          return (recoveryURL, sourceURL)
-        }.value
-        self?.retainedRecoverySourceURLsByID[version.id] = urls.1
-        self?.requestDocumentOpen(
-          at: urls.0,
-          recordsRecentDocument: false,
-          preferredResourceRootURL: nil,
-          retainedRecoveryVersionID: version.id
-        )
-      } catch {
-        self?.saveErrorMessage = error.localizedDescription
-      }
+      let urls = await Task.detached(priority: .userInitiated) {
+        let recoveryURL = version.recoveryURL.standardizedFileURL
+        let recoveryScopeURL =
+          (try? version.resolvedRecoveryURL()) ?? recoveryURL
+        let sourceURL =
+          (try? version.resolvedSourceURL()) ?? version.sourceURL.standardizedFileURL
+        return (recoveryURL, recoveryScopeURL, sourceURL)
+      }.value
+      guard let self else { return }
+
+      // A bookmark follows file identity and can resolve to the old source
+      // pathname after an atomic swap. Use it only to activate sandbox access;
+      // the durable manifest pathname is the authoritative recovery version.
+      retainedRecoveryScopeAccessesByID[version.id] = SecurityScopedAccess(url: urls.1)
+      retainedRecoverySourceURLsByID[version.id] = urls.2
+      requestDocumentOpen(
+        at: urls.0,
+        recordsRecentDocument: false,
+        preferredResourceRootURL: nil,
+        retainedRecoveryVersionID: version.id
+      )
     }
   }
 
