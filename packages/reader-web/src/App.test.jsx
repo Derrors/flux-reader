@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
+import { writeDocumentSession } from './document-session';
 import { recentStorageKey, writeRecentDocuments } from './recent-documents';
 import { draftStorageKey, readDraft, writeDraft } from './draft-storage';
 
@@ -323,7 +324,7 @@ describe('App 文件与目录工作流', () => {
     expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
   });
 
-  it('授权回程重试不会静默覆盖 dirty 文稿，取消后不再周期性弹出', async () => {
+  it('授权回程把新文稿打开为标签页，并保留原标签的 dirty 草稿', async () => {
     const user = await renderReady();
     const editor = await openEditableFile(user, { content: 'A' });
     mocks.trim.pickMarkdownFile.mockResolvedValueOnce('/share/private.md');
@@ -339,22 +340,30 @@ describe('App 文件与目录工作流', () => {
       ctime: 1,
       revision: 'a'.repeat(64),
     });
+    mocks.api.file.mockResolvedValueOnce({
+      content: '授权后内容',
+      actualPath: '/share/private.md',
+      size: 5,
+      mtime: 1,
+      ctime: 1,
+      revision: 'b'.repeat(64),
+    });
     act(() => window.dispatchEvent(new Event('focus')));
-    const dialog = await screen.findByRole('dialog', { name: '保存修改？' });
-    expect(editor).toHaveValue('A dirty');
-    expect(mocks.api.file.mock.calls.filter(([path]) => path === '/share/private.md')).toHaveLength(1);
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('授权后内容');
+    expect(mocks.api.file.mock.calls.filter(([path]) => path === '/share/private.md')).toHaveLength(2);
+    expect(screen.queryByRole('dialog', { name: '保存修改？' })).not.toBeInTheDocument();
 
-    await user.click(within(dialog).getByRole('button', { name: '取消' }));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '保存修改？' }))
-      .not.toBeInTheDocument());
+    await user.click(screen.getByRole('tab', { name: /a\.md/ }));
+    expect(screen.getByRole('textbox', { name: 'Markdown 编辑器' })).toHaveValue('A dirty');
+    expect(screen.getByRole('tab', { name: /a\.md/ })).toHaveTextContent('●');
+
     act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(mocks.api.fileState).toHaveBeenCalledWith(
       '/share/a.md',
       abortOptions(),
     ));
-    expect(mocks.api.file.mock.calls.filter(([path]) => path === '/share/private.md')).toHaveLength(1);
+    expect(mocks.api.file.mock.calls.filter(([path]) => path === '/share/private.md')).toHaveLength(2);
     expect(screen.queryByRole('dialog', { name: '保存修改？' })).not.toBeInTheDocument();
-    expect(editor).toHaveValue('A dirty');
   });
 
   it('当前目录授权被撤销后，从系统设置返回会隐藏失效目录', async () => {
@@ -691,13 +700,14 @@ describe('App fnOS 能力补齐', () => {
     await user.click(within(navigation).getByTitle('/share/valid.md'));
     expect(await screen.findByTestId('markdown-view')).toHaveTextContent('有效内容');
     await user.click(screen.getByRole('button', { name: '从最近文稿移除 valid.md' }));
-    expect(screen.queryByTitle('/share/valid.md')).not.toBeInTheDocument();
+    expect(within(navigation).queryByTitle('/share/valid.md')).not.toBeInTheDocument();
 
     // A newly and successfully read document is persisted; failed reads are not.
     mocks.trim.pickMarkdownFile.mockResolvedValueOnce('/share/new.md');
     await user.click(screen.getByRole('button', { name: '打开文件' }));
     await user.click(screen.getByRole('button', { name: '显示最近文稿' }));
-    expect(screen.getByTitle('/share/new.md')).toBeVisible();
+    expect(within(screen.getByRole('navigation', { name: '工作区与最近文稿' }))
+      .getByTitle('/share/new.md')).toBeVisible();
     await user.click(screen.getByRole('button', { name: '清空' }));
     expect(JSON.parse(window.localStorage.getItem(recentStorageKey('user-a')))).toEqual([]);
   });
@@ -1164,7 +1174,7 @@ describe('App fnOS 编辑、保存与恢复', () => {
     expect(readDraft('user-a', '/volume/docs/a.md')?.content).toBe('立即保存的草稿');
   });
 
-  it('保存后切换文稿继续执行；保存期间出现新编辑则停留在确认框', async () => {
+  it('多标签切换保留草稿；保存期间禁止切换且新编辑继续保持 dirty', async () => {
     const user = await renderReady();
     const navigation = await openDocsFolder(user);
     mocks.api.file.mockResolvedValueOnce({
@@ -1177,30 +1187,35 @@ describe('App fnOS 编辑、保存与恢复', () => {
     await user.clear(editor);
     await user.type(editor, 'A 草稿');
 
-    const save = deferred();
-    mocks.api.saveFile.mockReturnValueOnce(save.promise);
     mocks.api.file.mockResolvedValueOnce({
       content: 'B', actualPath: '/share/docs/b.md', size: 1, mtime: 1, ctime: 1,
       revision: 'c'.repeat(64),
     });
     await user.click(within(navigation).getByRole('button', { name: /b\.md/ }));
-    expect(await screen.findByRole('dialog', { name: '保存修改？' })).toBeVisible();
-    await user.click(within(screen.getByRole('dialog', { name: '保存修改？' }))
-      .getByRole('button', { name: '保存' }));
-    fireEvent.change(editor, { target: { value: '保存中的新草稿' } });
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('B');
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    await user.click(screen.getByRole('tab', { name: /a\.md/ }));
+    const activeEditor = screen.getByRole('textbox', { name: 'Markdown 编辑器' });
+    expect(activeEditor).toHaveValue('A 草稿');
+
+    const save = deferred();
+    mocks.api.saveFile.mockReturnValueOnce(save.promise);
+    await user.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.change(activeEditor, { target: { value: '保存中的新草稿' } });
+    expect(screen.getByRole('tab', { name: /b\.md/ })).toBeDisabled();
     await act(async () => save.resolve({
       content: 'A 草稿', actualPath: '/share/docs/a.md', size: 7, mtime: 2, ctime: 2,
       revision: 'b'.repeat(64),
     }));
 
-    expect(screen.getByRole('dialog', { name: '保存修改？' })).toBeVisible();
-    expect(mocks.api.file).toHaveBeenCalledTimes(1);
-    await user.click(within(screen.getByRole('dialog', { name: '保存修改？' }))
-      .getByRole('button', { name: '放弃修改' }));
+    expect(screen.getByRole('textbox', { name: 'Markdown 编辑器' }))
+      .toHaveValue('保存中的新草稿');
+    expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
+    await user.click(screen.getByRole('tab', { name: /b\.md/ }));
     expect(await screen.findByTestId('markdown-view')).toHaveTextContent('B');
   });
 
-  it('切换文稿提供保存、放弃和取消防丢稿流程', async () => {
+  it('关闭 dirty 标签提供保存、放弃和取消防丢稿流程', async () => {
     const user = await renderReady();
     const navigation = await openDocsFolder(user);
     mocks.api.file.mockResolvedValueOnce({
@@ -1211,11 +1226,46 @@ describe('App fnOS 编辑、保存与恢复', () => {
     await user.click(screen.getByRole('button', { name: '编辑' }));
     await user.type(screen.getByRole('textbox', { name: 'Markdown 编辑器' }), ' dirty');
 
+    mocks.api.file.mockResolvedValueOnce({
+      content: 'B', actualPath: '/share/docs/b.md', size: 1, mtime: 1, ctime: 1,
+      revision: 'b'.repeat(64),
+    });
     await user.click(within(navigation).getByRole('button', { name: /b\.md/ }));
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('B');
+    await user.click(screen.getByRole('button', { name: '关闭 a.md' }));
     const dialog = await screen.findByRole('dialog', { name: '保存修改？' });
     await user.click(within(dialog).getByRole('button', { name: '取消' }));
     expect(screen.getByRole('textbox', { name: 'Markdown 编辑器' })).toHaveValue('A dirty');
+    expect(screen.getByRole('tab', { name: /a\.md/ })).toBeVisible();
 
+    await user.click(screen.getByRole('button', { name: '关闭 a.md' }));
+    await user.click(within(await screen.findByRole('dialog', { name: '保存修改？' }))
+      .getByRole('button', { name: '放弃修改' }));
+    await waitFor(() => expect(screen.queryByRole('tab', { name: /a\.md/ }))
+      .not.toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: /b\.md/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('关闭未激活的干净标签不会切换当前文稿', async () => {
+    const user = await renderReady();
+    const navigation = await openDocsFolder(user);
+    mocks.api.file.mockResolvedValueOnce({
+      content: 'A', actualPath: '/share/docs/a.md', size: 1, mtime: 1, ctime: 1,
+      revision: 'a'.repeat(64),
+    });
+    await user.click(within(navigation).getByRole('button', { name: /a\.md/ }));
+    mocks.api.file.mockResolvedValueOnce({
+      content: 'B', actualPath: '/share/docs/b.md', size: 1, mtime: 1, ctime: 1,
+      revision: 'b'.repeat(64),
+    });
+    await user.click(within(navigation).getByRole('button', { name: /b\.md/ }));
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('B');
+
+    await user.click(screen.getByRole('button', { name: '关闭 a.md' }));
+
+    expect(screen.queryByRole('tab', { name: /a\.md/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /b\.md/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('markdown-view')).toHaveTextContent('B');
   });
 
   it('关闭工作区只移除导航，保留当前文稿和未保存草稿', async () => {
@@ -1239,7 +1289,7 @@ describe('App fnOS 编辑、保存与恢复', () => {
     expect(screen.getByRole('heading', { name: /a\.md •/ })).toBeVisible();
   });
 
-  it('切换前保存遇到冲突时只显示一个模态框', async () => {
+  it('保存冲突时只显示一个模态框，并在处理前禁用标签切换', async () => {
     const user = await renderReady();
     const navigation = await openDocsFolder(user);
     mocks.api.file.mockResolvedValueOnce({
@@ -1250,25 +1300,28 @@ describe('App fnOS 编辑、保存与恢复', () => {
     await user.click(screen.getByRole('button', { name: '编辑' }));
     await user.type(screen.getByRole('textbox', { name: 'Markdown 编辑器' }), ' dirty');
 
-    mocks.api.saveFile.mockRejectedValueOnce(httpError('文件已变化', 409, 'FILE_CONFLICT'));
-    mocks.api.file
-      .mockResolvedValueOnce({
-        content: '磁盘新版本', actualPath: '/share/docs/a.md', size: 5, mtime: 2, ctime: 2,
-        revision: 'b'.repeat(64),
-      })
-      .mockResolvedValueOnce({
-        content: 'B', actualPath: '/share/docs/b.md', size: 1, mtime: 1, ctime: 1,
-        revision: 'c'.repeat(64),
-      });
+    mocks.api.file.mockResolvedValueOnce({
+      content: 'B', actualPath: '/share/docs/b.md', size: 1, mtime: 1, ctime: 1,
+      revision: 'c'.repeat(64),
+    });
     await user.click(within(navigation).getByRole('button', { name: /b\.md/ }));
-    await user.click(within(await screen.findByRole('dialog', { name: '保存修改？' }))
-      .getByRole('button', { name: '保存' }));
+    await screen.findByText('B');
+    await user.click(screen.getByRole('tab', { name: /a\.md/ }));
+
+    mocks.api.saveFile.mockRejectedValueOnce(httpError('文件已变化', 409, 'FILE_CONFLICT'));
+    mocks.api.file.mockResolvedValueOnce({
+      content: '磁盘新版本', actualPath: '/share/docs/a.md', size: 5, mtime: 2, ctime: 2,
+      revision: 'b'.repeat(64),
+    });
+    await user.click(screen.getByRole('button', { name: '保存' }));
 
     const conflictDialog = await screen.findByRole('dialog', { name: '文稿已在其他位置修改' });
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(screen.getByRole('tab', { name: /b\.md/ })).toBeDisabled();
     await user.click(within(conflictDialog).getByRole('button', { name: '保留草稿' }));
-    expect(await screen.findByRole('dialog', { name: '保存修改？' })).toBeVisible();
-    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: /b\.md/ }));
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('B');
   });
 
   it('FILE_CONFLICT 后不覆盖磁盘，保留草稿会以最新 revision 再保存', async () => {
@@ -1335,7 +1388,7 @@ describe('App fnOS 编辑、保存与恢复', () => {
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
   });
 
-  it('轮询读取途中出现切换确认时停止提交，不叠加外部冲突对话框', async () => {
+  it('轮询读取途中切换标签会废弃旧轮询，不叠加外部冲突对话框', async () => {
     const user = await renderReady();
     const navigation = await openDocsFolder(user);
     mocks.api.file.mockResolvedValueOnce({
@@ -1355,19 +1408,21 @@ describe('App fnOS 编辑、保存与恢复', () => {
       abortOptions(),
     ));
 
+    mocks.api.file.mockResolvedValueOnce({
+      content: 'B', actualPath: '/share/docs/b.md', size: 1, mtime: 1, ctime: 1,
+      revision: 'c'.repeat(64),
+    });
     await user.click(screen.getByRole('button', { name: /b\.md/ }));
-    expect(await screen.findByRole('dialog', { name: '保存修改？' })).toBeVisible();
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('B');
     await act(async () => state.resolve({
       actualPath: '/share/docs/a.md', size: 2, mtime: 2, ctime: 2,
       revision: 'b'.repeat(64),
     }));
 
-    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: '文稿已在其他位置修改' }))
       .not.toBeInTheDocument();
-    expect(mocks.api.file).toHaveBeenCalledTimes(1);
-    await user.click(within(screen.getByRole('dialog', { name: '保存修改？' }))
-      .getByRole('button', { name: '取消' }));
+    expect(screen.getByRole('tab', { name: /a\.md/ })).toHaveTextContent('●');
   });
 
   it('旧轮询不会把刚保存的 revision 误判为外部冲突', async () => {
@@ -2281,5 +2336,78 @@ describe('App fnOS 编辑、保存与恢复', () => {
     expect(await screen.findByText(/超过 2 MB 保存上限/)).toBeVisible();
     expect(mocks.api.saveFile).not.toHaveBeenCalled();
     expect(editor).toHaveValue('你'.repeat(700_000));
+  });
+
+  it('在编辑器中查找、替换当前项和全部匹配，并更新未保存标记', async () => {
+    const user = await renderReady();
+    const editor = await openEditableFile(user, { content: 'one one' });
+
+    await user.click(screen.getByRole('button', { name: '查找' }));
+    await user.type(screen.getByRole('searchbox', { name: '查找内容' }), 'one');
+    expect(screen.getByRole('status')).toHaveTextContent('1 / 2');
+    await user.click(screen.getByRole('button', { name: '显示替换' }));
+    await user.type(screen.getByRole('textbox', { name: '替换内容' }), 'two');
+    await user.click(screen.getByRole('button', { name: '替换', exact: true }));
+    expect(editor).toHaveValue('two one');
+    expect(screen.getByRole('tab', { name: /a\.md/ })).toHaveTextContent('●');
+
+    await user.click(screen.getByRole('button', { name: '全部替换' }));
+    expect(editor).toHaveValue('two two');
+    expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
+  });
+
+  it('编辑与预览分栏共享同一份实时草稿', async () => {
+    const user = await renderReady();
+    await openEditableFile(user, { content: '# 初始' });
+
+    await user.click(screen.getByRole('button', { name: '分栏' }));
+    expect(screen.getByRole('region', { name: '编辑器面板' })).toBeVisible();
+    expect(screen.getByRole('region', { name: '预览面板' })).toBeVisible();
+    const editor = screen.getByRole('textbox', { name: 'Markdown 编辑器' });
+    await user.clear(editor);
+    await user.type(editor, '# 实时预览');
+    expect(screen.getByTestId('markdown-view')).toHaveTextContent('# 实时预览');
+
+    const previewPane = screen.getByRole('region', { name: '预览面板' });
+    Object.defineProperties(editor, {
+      scrollHeight: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 200 },
+    });
+    Object.defineProperties(previewPane, {
+      scrollHeight: { configurable: true, value: 2_000 },
+      clientHeight: { configurable: true, value: 400 },
+    });
+    editor.scrollTop = 400;
+    fireEvent.scroll(editor);
+    expect(previewPane.scrollTop).toBe(800);
+  });
+
+  it('按 uid 恢复标签会话，并从独立草稿存储恢复活动标签的未保存内容', async () => {
+    mocks.api.env.mockResolvedValue({ openApiAvailable: true, uid: 'user-a' });
+    writeDocumentSession('user-a', [
+      { path: '/share/a.md', name: 'a.md', displayPath: '/share/a.md' },
+      { path: '/share/b.md', name: 'b.md', displayPath: '/share/b.md', dirty: true },
+    ], '/share/b.md');
+    writeDraft('user-a', '/share/b.md', 'B 恢复草稿', 'b'.repeat(64));
+    mocks.api.file.mockImplementation(async (path) => ({
+      content: path.endsWith('/b.md') ? 'B 磁盘' : 'A 磁盘',
+      actualPath: path,
+      size: 4,
+      mtime: 1,
+      ctime: 1,
+      revision: path.endsWith('/b.md') ? 'b'.repeat(64) : 'a'.repeat(64),
+      writable: true,
+    }));
+
+    const user = await renderReady();
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('B 恢复草稿');
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
+    expect(screen.getByRole('tab', { name: /b\.md/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /b\.md/ })).toHaveTextContent('●');
+
+    await user.click(screen.getByRole('tab', { name: /a\.md/ }));
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('A 磁盘');
+    await user.click(screen.getByRole('tab', { name: /b\.md/ }));
+    expect(screen.getByTestId('markdown-view')).toHaveTextContent('B 恢复草稿');
   });
 });

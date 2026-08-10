@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 struct ReaderView: View {
   @ObservedObject var viewModel: ReaderViewModel
   @Binding var appearance: AppAppearance
+  @State private var editorScrollFraction = 0.0
+  @State private var previewScrollFraction = 0.0
 
   var body: some View {
     NavigationSplitView {
@@ -22,17 +24,26 @@ struct ReaderView: View {
             Label("恢复版本（只读）", systemImage: "lock.fill")
               .help("恢复版本只能查看；如需继续处理，请使用“另存为”创建新文稿")
           } else {
-            Button {
-              viewModel.toggleEditing()
-            } label: {
-              Label(
-                viewModel.isEditing ? "预览" : "编辑",
-                systemImage: viewModel.isEditing ? "eye" : "pencil"
-              )
+            Picker("文稿视图", selection: documentViewModeBinding) {
+              ForEach(ReaderViewModel.DocumentViewMode.allCases) { mode in
+                Label(mode.title, systemImage: mode.systemImage)
+                  .tag(mode)
+              }
             }
-            .help(viewModel.isEditing ? "预览当前草稿" : "编辑当前文稿")
-            .accessibilityIdentifier("flux.edit")
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 190)
+            .help("切换预览、编辑或左右分栏")
+            .accessibilityIdentifier("flux.document-view-mode")
           }
+
+          Button {
+            viewModel.presentFind()
+          } label: {
+            Label("查找", systemImage: "magnifyingglass")
+          }
+          .help("在当前文稿中查找（⌘F）")
+          .accessibilityIdentifier("flux.find")
 
           if viewModel.hasUnsavedChanges {
             Text("未保存")
@@ -171,6 +182,23 @@ struct ReaderView: View {
         "恢复版本用于保留其他应用通过旧文件句柄晚到写入的内容。应用至少保留 24 小时；确认删除后无法恢复。"
       )
     }
+    .confirmationDialog(
+      "关闭前要保存更改吗？",
+      isPresented: $viewModel.isTabCloseConfirmationPresented,
+      titleVisibility: .visible
+    ) {
+      Button("保存并关闭") {
+        viewModel.saveAndClosePendingTab()
+      }
+      Button("不保存并关闭", role: .destructive) {
+        viewModel.discardAndClosePendingTab()
+      }
+      Button("取消", role: .cancel) {
+        viewModel.cancelPendingTabClose()
+      }
+    } message: {
+      Text("未保存的更改只会在你明确放弃后丢弃。")
+    }
     .alert("无法完成文稿操作", isPresented: saveErrorBinding) {
       Button("好") {
         viewModel.dismissSaveError()
@@ -189,6 +217,17 @@ struct ReaderView: View {
       text: $viewModel.searchQuery,
       placement: .sidebar,
       prompt: "搜索文件名和正文"
+    )
+    .onChange(of: viewModel.activeTabID) { _, _ in
+      editorScrollFraction = 0
+      previewScrollFraction = 0
+    }
+  }
+
+  private var documentViewModeBinding: Binding<ReaderViewModel.DocumentViewMode> {
+    Binding(
+      get: { viewModel.documentViewMode },
+      set: { viewModel.setDocumentViewMode($0) }
     )
   }
 
@@ -493,8 +532,29 @@ struct ReaderView: View {
     }
   }
 
-  @ViewBuilder
   private var detail: some View {
+    VStack(spacing: 0) {
+      if !viewModel.documentTabs.isEmpty {
+        DocumentTabBar(
+          tabs: viewModel.documentTabs,
+          activeTabID: viewModel.activeTabID,
+          onActivate: viewModel.activateTab,
+          onClose: viewModel.requestCloseTab
+        )
+        Divider()
+      }
+
+      if viewModel.isFindPresented, viewModel.currentDocument != nil {
+        DocumentFindBar(viewModel: viewModel)
+        Divider()
+      }
+
+      detailContent
+    }
+  }
+
+  @ViewBuilder
+  private var detailContent: some View {
     switch viewModel.phase {
     case .empty:
       placeholder
@@ -524,16 +584,46 @@ struct ReaderView: View {
           Divider()
         }
 
-        if viewModel.isEditing {
+        if viewModel.isSplitView, let previewDocument = viewModel.previewDocument {
+          HSplitView {
+            MarkdownEditorView(
+              content: $viewModel.draftContent,
+              document: document,
+              hasUnsavedChanges: viewModel.hasUnsavedChanges,
+              isSaving: viewModel.isSaving,
+              statusMessage: viewModel.saveStatusMessage,
+              selectedRange: viewModel.activeFindRange,
+              targetScrollFraction: previewScrollFraction,
+              onScrollFractionChange: { editorScrollFraction = $0 }
+            )
+            .frame(minWidth: 280)
+
+            MarkdownRendererView(
+              document: previewDocument,
+              findQuery: viewModel.isFindPresented ? viewModel.findQuery : "",
+              findCaseSensitive: viewModel.findCaseSensitive,
+              activeFindMatch: viewModel.activeFindMatchIndex,
+              targetScrollFraction: editorScrollFraction,
+              onScrollFractionChange: { previewScrollFraction = $0 }
+            )
+            .frame(minWidth: 280)
+          }
+        } else if viewModel.isEditing {
           MarkdownEditorView(
             content: $viewModel.draftContent,
             document: document,
             hasUnsavedChanges: viewModel.hasUnsavedChanges,
             isSaving: viewModel.isSaving,
-            statusMessage: viewModel.saveStatusMessage
+            statusMessage: viewModel.saveStatusMessage,
+            selectedRange: viewModel.activeFindRange
           )
         } else if let previewDocument = viewModel.previewDocument {
-          MarkdownRendererView(document: previewDocument)
+          MarkdownRendererView(
+            document: previewDocument,
+            findQuery: viewModel.isFindPresented ? viewModel.findQuery : "",
+            findCaseSensitive: viewModel.findCaseSensitive,
+            activeFindMatch: viewModel.activeFindMatchIndex
+          )
         }
       }
     case .failure(let message):
@@ -605,6 +695,168 @@ struct ReaderView: View {
   }
 }
 
+private struct DocumentTabBar: View {
+  let tabs: [ReaderViewModel.DocumentTab]
+  let activeTabID: URL?
+  let onActivate: (URL) -> Void
+  let onClose: (URL) -> Void
+
+  var body: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 4) {
+        ForEach(tabs) { tab in
+          HStack(spacing: 4) {
+            Button {
+              onActivate(tab.id)
+            } label: {
+              HStack(spacing: 6) {
+                Image(systemName: "doc.text")
+                Text(tab.displayName)
+                  .lineLimit(1)
+                if tab.hasUnsavedChanges {
+                  Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 7, height: 7)
+                    .accessibilityLabel("未保存")
+                }
+              }
+            }
+            .buttonStyle(.plain)
+            .help(tab.path)
+            .accessibilityIdentifier("flux.tab.\(tab.displayName)")
+
+            Button {
+              onClose(tab.id)
+            } label: {
+              Image(systemName: "xmark")
+                .font(.caption2)
+            }
+            .buttonStyle(.borderless)
+            .help("关闭 \(tab.displayName)")
+            .accessibilityLabel("关闭 \(tab.displayName)")
+          }
+          .padding(.horizontal, 10)
+          .padding(.vertical, 7)
+          .background(
+            activeTabID == tab.id
+              ? Color.accentColor.opacity(0.16) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 7)
+          )
+          .overlay(alignment: .bottom) {
+            if activeTabID == tab.id {
+              Rectangle()
+                .fill(Color.accentColor)
+                .frame(height: 2)
+            }
+          }
+        }
+      }
+      .padding(.horizontal, 8)
+      .padding(.vertical, 5)
+    }
+    .background(.bar)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("打开的文稿")
+  }
+}
+
+private struct DocumentFindBar: View {
+  @ObservedObject var viewModel: ReaderViewModel
+  @FocusState private var queryFocused: Bool
+
+  var body: some View {
+    VStack(spacing: 6) {
+      HStack(spacing: 7) {
+        Button {
+          viewModel.toggleReplace()
+        } label: {
+          Image(systemName: viewModel.isReplacePresented ? "chevron.down" : "chevron.right")
+        }
+        .buttonStyle(.borderless)
+        .disabled(!viewModel.canEdit)
+        .help(viewModel.isReplacePresented ? "隐藏替换" : "显示替换")
+
+        TextField("查找", text: $viewModel.findQuery)
+          .textFieldStyle(.roundedBorder)
+          .focused($queryFocused)
+          .onSubmit { viewModel.selectNextFindMatch() }
+          .accessibilityIdentifier("flux.find-query")
+
+        Text(findResultLabel)
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(.secondary)
+          .frame(minWidth: 64)
+
+        Button {
+          viewModel.findCaseSensitive.toggle()
+        } label: {
+          Text("Aa")
+            .font(.caption.weight(viewModel.findCaseSensitive ? .bold : .regular))
+        }
+        .buttonStyle(.borderless)
+        .help("区分大小写")
+        .accessibilityLabel("区分大小写")
+
+        Button {
+          viewModel.selectNextFindMatch(backward: true)
+        } label: {
+          Image(systemName: "chevron.up")
+        }
+        .buttonStyle(.borderless)
+        .disabled(viewModel.findMatchCount == 0)
+        .help("上一个匹配")
+
+        Button {
+          viewModel.selectNextFindMatch()
+        } label: {
+          Image(systemName: "chevron.down")
+        }
+        .buttonStyle(.borderless)
+        .disabled(viewModel.findMatchCount == 0)
+        .help("下一个匹配")
+
+        Button {
+          viewModel.dismissFind()
+        } label: {
+          Image(systemName: "xmark")
+        }
+        .buttonStyle(.borderless)
+        .help("关闭查找")
+      }
+
+      if viewModel.isReplacePresented {
+        HStack(spacing: 7) {
+          Color.clear.frame(width: 18, height: 1)
+          TextField("替换为", text: $viewModel.replaceQuery)
+            .textFieldStyle(.roundedBorder)
+            .onSubmit { viewModel.replaceCurrentFindMatch() }
+            .accessibilityIdentifier("flux.replace-query")
+          Button("替换") {
+            viewModel.replaceCurrentFindMatch()
+          }
+          .disabled(!viewModel.canReplace)
+          Button("全部替换") {
+            viewModel.replaceAllFindMatches()
+          }
+          .disabled(!viewModel.canReplace)
+        }
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 7)
+    .background(.bar)
+    .onAppear { queryFocused = true }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("文稿内查找与替换")
+  }
+
+  private var findResultLabel: String {
+    guard !viewModel.findQuery.isEmpty else { return "输入关键词" }
+    guard viewModel.findMatchCount > 0 else { return "无结果" }
+    return "\(viewModel.activeFindMatchIndex + 1) / \(viewModel.findMatchCount)"
+  }
+}
+
 private struct MarkdownEditorView: View {
   @Binding var content: String
 
@@ -612,21 +864,20 @@ private struct MarkdownEditorView: View {
   let hasUnsavedChanges: Bool
   let isSaving: Bool
   let statusMessage: String?
-
-  @FocusState private var editorIsFocused: Bool
+  var selectedRange: NSRange? = nil
+  var targetScrollFraction: Double? = nil
+  var onScrollFractionChange: (Double) -> Void = { _ in }
 
   var body: some View {
     VStack(spacing: 0) {
-      TextEditor(text: $content)
-        .font(.system(.body, design: .monospaced))
-        .lineSpacing(3)
-        .padding(12)
-        .textEditorStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .background(Color(nsColor: .textBackgroundColor))
-        .focused($editorIsFocused)
-        .accessibilityLabel("Markdown 编辑器")
-        .accessibilityIdentifier("flux.editor")
+      MarkdownTextView(
+        text: $content,
+        selectedRange: selectedRange,
+        targetScrollFraction: targetScrollFraction,
+        onScrollFractionChange: onScrollFractionChange
+      )
+      .accessibilityLabel("Markdown 编辑器")
+      .accessibilityIdentifier("flux.editor")
 
       Divider()
 
@@ -660,8 +911,152 @@ private struct MarkdownEditorView: View {
       .padding(.vertical, 7)
       .background(.bar)
     }
-    .onAppear {
-      editorIsFocused = true
+  }
+}
+
+private struct MarkdownTextView: NSViewRepresentable {
+  @Binding var text: String
+  let selectedRange: NSRange?
+  let targetScrollFraction: Double?
+  let onScrollFractionChange: (Double) -> Void
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(parent: self)
+  }
+
+  func makeNSView(context: Context) -> NSScrollView {
+    let scrollView = NSScrollView()
+    scrollView.hasVerticalScroller = true
+    scrollView.hasHorizontalScroller = false
+    scrollView.autohidesScrollers = true
+    scrollView.drawsBackground = true
+    scrollView.backgroundColor = .textBackgroundColor
+    scrollView.contentView.postsBoundsChangedNotifications = true
+
+    let textView = NSTextView()
+    textView.isRichText = false
+    textView.importsGraphics = false
+    textView.allowsUndo = true
+    textView.isVerticallyResizable = true
+    textView.isHorizontallyResizable = false
+    textView.autoresizingMask = [.width]
+    textView.minSize = .zero
+    textView.maxSize = NSSize(
+      width: CGFloat.greatestFiniteMagnitude,
+      height: CGFloat.greatestFiniteMagnitude
+    )
+    textView.textContainer?.widthTracksTextView = true
+    textView.textContainer?.containerSize = NSSize(
+      width: scrollView.contentSize.width,
+      height: CGFloat.greatestFiniteMagnitude
+    )
+    textView.textContainerInset = NSSize(width: 12, height: 12)
+    textView.textContainer?.lineFragmentPadding = 0
+    textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+    textView.string = text
+    textView.delegate = context.coordinator
+    textView.isAutomaticQuoteSubstitutionEnabled = false
+    textView.isAutomaticDashSubstitutionEnabled = false
+    textView.isAutomaticTextReplacementEnabled = false
+    textView.setAccessibilityIdentifier("flux.editor")
+    scrollView.documentView = textView
+    context.coordinator.attach(scrollView: scrollView, textView: textView)
+
+    DispatchQueue.main.async {
+      textView.window?.makeFirstResponder(textView)
+    }
+    return scrollView
+  }
+
+  func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    context.coordinator.parent = self
+    guard let textView = scrollView.documentView as? NSTextView else { return }
+    if textView.string != text {
+      context.coordinator.isApplyingText = true
+      let selection = textView.selectedRange()
+      textView.string = text
+      textView.setSelectedRange(
+        NSRange(
+          location: min(selection.location, (text as NSString).length),
+          length: 0
+        ))
+      context.coordinator.isApplyingText = false
+    }
+    if let selectedRange,
+      NSMaxRange(selectedRange) <= (textView.string as NSString).length,
+      textView.selectedRange() != selectedRange
+    {
+      textView.setSelectedRange(selectedRange)
+      textView.scrollRangeToVisible(selectedRange)
+    }
+    context.coordinator.applyScrollFraction(targetScrollFraction)
+  }
+
+  static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+    coordinator.detach()
+    (scrollView.documentView as? NSTextView)?.delegate = nil
+  }
+
+  @MainActor
+  final class Coordinator: NSObject, NSTextViewDelegate {
+    var parent: MarkdownTextView
+    var isApplyingText = false
+    private weak var scrollView: NSScrollView?
+    private weak var textView: NSTextView?
+    private var isApplyingScroll = false
+
+    init(parent: MarkdownTextView) {
+      self.parent = parent
+    }
+
+    func attach(scrollView: NSScrollView, textView: NSTextView) {
+      self.scrollView = scrollView
+      self.textView = textView
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(boundsDidChange),
+        name: NSView.boundsDidChangeNotification,
+        object: scrollView.contentView
+      )
+    }
+
+    func detach() {
+      NotificationCenter.default.removeObserver(
+        self,
+        name: NSView.boundsDidChangeNotification,
+        object: scrollView?.contentView
+      )
+      scrollView = nil
+      textView = nil
+    }
+
+    @objc private func boundsDidChange(_ notification: Notification) {
+      reportScrollFraction()
+    }
+
+    func textDidChange(_ notification: Notification) {
+      guard !isApplyingText, let textView else { return }
+      parent.text = textView.string
+    }
+
+    func applyScrollFraction(_ value: Double?) {
+      guard let value, let scrollView, let textView else { return }
+      let maximum = max(textView.bounds.height - scrollView.contentSize.height, 0)
+      guard maximum > 0 else { return }
+      let target = maximum * min(1, max(0, value))
+      if abs(scrollView.contentView.bounds.origin.y - target) < 1 { return }
+      isApplyingScroll = true
+      scrollView.contentView.scroll(to: NSPoint(x: 0, y: target))
+      scrollView.reflectScrolledClipView(scrollView.contentView)
+      isApplyingScroll = false
+    }
+
+    private func reportScrollFraction() {
+      guard !isApplyingScroll, let scrollView, let textView else { return }
+      let maximum = max(textView.bounds.height - scrollView.contentSize.height, 0)
+      parent.onScrollFractionChange(
+        maximum > 0 ? min(1, max(0, scrollView.contentView.bounds.origin.y / maximum)) : 0
+      )
     }
   }
 }

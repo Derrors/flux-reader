@@ -89,6 +89,180 @@ final class ReaderViewModelTests: XCTestCase {
   }
 
   @MainActor
+  func testFindReplaceAndSplitViewKeepTheDraftDirty() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("find.md")
+    try Data("# Alpha\n\nalpha alpha".utf8).write(to: markdownURL)
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(),
+      documentSessionStore: InMemoryDocumentSessionStore()
+    )
+
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+    viewModel.setDocumentViewMode(.split)
+    viewModel.presentFind(replace: true)
+    viewModel.findQuery = "alpha"
+
+    XCTAssertEqual(viewModel.documentViewMode, .split)
+    XCTAssertTrue(viewModel.isEditing)
+    XCTAssertTrue(viewModel.isSplitView)
+    XCTAssertTrue(viewModel.isReplacePresented)
+    XCTAssertEqual(viewModel.findMatchCount, 3)
+    XCTAssertEqual(viewModel.activeFindMatchIndex, 0)
+
+    viewModel.replaceQuery = "beta"
+    viewModel.replaceCurrentFindMatch()
+    XCTAssertEqual(viewModel.draftContent, "# beta\n\nalpha alpha")
+    XCTAssertEqual(viewModel.findMatchCount, 2)
+
+    viewModel.replaceAllFindMatches()
+    XCTAssertEqual(viewModel.draftContent, "# beta\n\nbeta beta")
+    XCTAssertEqual(viewModel.findMatchCount, 0)
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertTrue(viewModel.documentTabs.first?.hasUnsavedChanges == true)
+  }
+
+  @MainActor
+  func testRestoresMultipleTabsActiveTabAndUnsavedDraft() async throws {
+    let firstURL = temporaryDirectory.appendingPathComponent("first.md")
+    let secondURL = temporaryDirectory.appendingPathComponent("second.md")
+    try Data("# First".utf8).write(to: firstURL)
+    try Data("# Second".utf8).write(to: secondURL)
+    let sessionStore = InMemoryDocumentSessionStore()
+    let firstViewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(),
+      documentSessionStore: sessionStore
+    )
+
+    firstViewModel.restoreLibraryIfNeeded()
+    firstViewModel.open(firstURL)
+    await waitUntil { firstViewModel.currentDocument?.url == firstURL.standardizedFileURL }
+    firstViewModel.setDocumentViewMode(.split)
+    firstViewModel.draftContent = "# First draft"
+    firstViewModel.open(secondURL)
+    await waitUntil { firstViewModel.currentDocument?.url == secondURL.standardizedFileURL }
+
+    XCTAssertTrue(firstViewModel.persistSessionForTermination())
+    let stored = try XCTUnwrap(sessionStore.record)
+    XCTAssertEqual(stored.tabs.count, 2)
+    XCTAssertEqual(stored.activeTabURL, secondURL.standardizedFileURL)
+
+    let restoredViewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(),
+      documentSessionStore: sessionStore
+    )
+    restoredViewModel.restoreLibraryIfNeeded()
+    await waitUntil {
+      restoredViewModel.currentDocument?.url == secondURL.standardizedFileURL
+        && restoredViewModel.documentTabs.count == 2
+    }
+
+    restoredViewModel.activateTab(firstURL)
+    await waitUntil {
+      restoredViewModel.currentDocument?.url == firstURL.standardizedFileURL
+    }
+    XCTAssertEqual(restoredViewModel.draftContent, "# First draft")
+    XCTAssertTrue(restoredViewModel.hasUnsavedChanges)
+    XCTAssertEqual(restoredViewModel.documentViewMode, .split)
+    XCTAssertTrue(
+      restoredViewModel.documentTabs.first(where: { $0.id == firstURL.standardizedFileURL })?
+        .hasUnsavedChanges == true
+    )
+  }
+
+  func testLocalDocumentSessionStoreRoundTripsWithPrivatePermissions() throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("session.md")
+    try Data("# Session".utf8).write(to: markdownURL)
+    let document = try LocalFileService().loadDocument(at: markdownURL)
+    let record = DocumentSessionRecord(
+      tabs: [
+        DocumentSessionTabRecord(
+          document: document,
+          draftContent: "# Unsaved session",
+          isEditing: true,
+          isSplitView: true
+        )
+      ],
+      activeTabURL: markdownURL
+    )
+    let fileURL =
+      temporaryDirectory
+      .appendingPathComponent("Sessions", isDirectory: true)
+      .appendingPathComponent("document-session.json")
+    let store = LocalDocumentSessionStore(fileURL: fileURL)
+
+    try store.save(record)
+
+    XCTAssertEqual(try store.load(), record)
+    let fileAttributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+    let directoryAttributes = try FileManager.default.attributesOfItem(
+      atPath: fileURL.deletingLastPathComponent().path
+    )
+    XCTAssertEqual((fileAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+
+    try store.clear()
+    XCTAssertNil(try store.load())
+  }
+
+  @MainActor
+  func testRefusesThirteenthTabWithoutHidingTheActiveDocument() async throws {
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(),
+      documentSessionStore: InMemoryDocumentSessionStore()
+    )
+    var urls: [URL] = []
+    for index in 0..<DocumentSessionRecord.maximumTabCount + 1 {
+      let url = temporaryDirectory.appendingPathComponent("tab-\(index).md")
+      try Data("# Tab \(index)".utf8).write(to: url)
+      urls.append(url)
+    }
+
+    for url in urls.prefix(DocumentSessionRecord.maximumTabCount) {
+      viewModel.open(url)
+      await waitUntil { viewModel.currentDocument?.url == url.standardizedFileURL }
+    }
+    let lastAcceptedURL = try XCTUnwrap(urls.dropLast().last)
+    viewModel.open(try XCTUnwrap(urls.last))
+
+    XCTAssertEqual(viewModel.documentTabs.count, DocumentSessionRecord.maximumTabCount)
+    XCTAssertEqual(viewModel.currentDocument?.url, lastAcceptedURL.standardizedFileURL)
+    XCTAssertTrue(viewModel.saveErrorMessage?.contains("最多同时打开") == true)
+  }
+
+  @MainActor
+  func testFailedNewTabLoadRestoresThePreviousDocument() async throws {
+    let originalURL = temporaryDirectory.appendingPathComponent("original.md")
+    let missingURL = temporaryDirectory.appendingPathComponent("missing.md")
+    try Data("# Original".utf8).write(to: originalURL)
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(),
+      documentSessionStore: InMemoryDocumentSessionStore()
+    )
+
+    viewModel.open(originalURL)
+    await waitUntil { viewModel.currentDocument?.url == originalURL.standardizedFileURL }
+    viewModel.draftContent = "# Unsaved original"
+    viewModel.open(missingURL)
+    await waitUntil { viewModel.saveErrorMessage != nil }
+
+    XCTAssertEqual(viewModel.currentDocument?.url, originalURL.standardizedFileURL)
+    XCTAssertEqual(viewModel.draftContent, "# Unsaved original")
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
+    XCTAssertFalse(viewModel.documentTabs.contains { $0.id == missingURL.standardizedFileURL })
+  }
+
+  @MainActor
   func testRetainedRecoveryVersionOpensReadOnlyAndCannotSaveInPlace() async throws {
     let sourceDirectory = temporaryDirectory.appendingPathComponent(
       "Documents",
@@ -583,7 +757,7 @@ final class ReaderViewModelTests: XCTestCase {
   }
 
   @MainActor
-  func testCancelAndDiscardWhenOpeningAnotherDocumentWithUnsavedChanges() async throws {
+  func testOpeningAnotherDocumentKeepsDirtyTabAndCloseRequiresDecision() async throws {
     let firstURL = temporaryDirectory.appendingPathComponent("first.md")
     let secondURL = temporaryDirectory.appendingPathComponent("second.md")
     try Data("# First".utf8).write(to: firstURL)
@@ -601,34 +775,51 @@ final class ReaderViewModelTests: XCTestCase {
     viewModel.draftContent = "# First draft"
 
     viewModel.open(secondURL)
+    await waitUntil { viewModel.currentDocument?.url == secondURL.standardizedFileURL }
 
-    XCTAssertTrue(viewModel.isUnsavedChangesConfirmationPresented)
-    XCTAssertEqual(viewModel.currentDocument?.url, firstURL.standardizedFileURL)
-    XCTAssertEqual(store.recordedDocumentURLs, [firstURL.standardizedFileURL])
-
-    viewModel.cancelPendingDocumentOpen()
-
-    XCTAssertFalse(viewModel.isUnsavedChangesConfirmationPresented)
-    XCTAssertEqual(viewModel.currentDocument?.url, firstURL.standardizedFileURL)
+    XCTAssertEqual(viewModel.documentTabs.count, 2)
+    XCTAssertEqual(viewModel.currentDocument?.content, "# Second")
+    viewModel.requestCloseTab(firstURL)
     XCTAssertEqual(viewModel.draftContent, "# First draft")
     XCTAssertTrue(viewModel.hasUnsavedChanges)
     XCTAssertTrue(viewModel.isEditing)
-    XCTAssertEqual(store.recordedDocumentURLs, [firstURL.standardizedFileURL])
+    XCTAssertTrue(viewModel.isTabCloseConfirmationPresented)
+    viewModel.cancelPendingTabClose()
+    XCTAssertEqual(viewModel.documentTabs.count, 2)
+    XCTAssertEqual(viewModel.draftContent, "# First draft")
 
-    viewModel.open(secondURL)
-    XCTAssertTrue(viewModel.isUnsavedChangesConfirmationPresented)
-    viewModel.discardChangesAndOpenPendingDocument()
+    viewModel.requestCloseTab(firstURL)
+    viewModel.discardAndClosePendingTab()
     await waitUntil { viewModel.currentDocument?.url == secondURL.standardizedFileURL }
-
-    XCTAssertFalse(viewModel.isUnsavedChangesConfirmationPresented)
-    XCTAssertEqual(viewModel.currentDocument?.content, "# Second")
-    XCTAssertEqual(viewModel.draftContent, "# Second")
-    XCTAssertFalse(viewModel.hasUnsavedChanges)
-    XCTAssertFalse(viewModel.isEditing)
+    XCTAssertEqual(viewModel.documentTabs.count, 1)
     XCTAssertEqual(
       store.recordedDocumentURLs,
       [firstURL.standardizedFileURL, secondURL.standardizedFileURL]
     )
+  }
+
+  @MainActor
+  func testClosingCleanBackgroundTabKeepsTheActiveDocument() async throws {
+    let firstURL = temporaryDirectory.appendingPathComponent("first.md")
+    let secondURL = temporaryDirectory.appendingPathComponent("second.md")
+    try Data("# First".utf8).write(to: firstURL)
+    try Data("# Second".utf8).write(to: secondURL)
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(),
+      documentSessionStore: InMemoryDocumentSessionStore()
+    )
+
+    viewModel.open(firstURL)
+    await waitUntil { viewModel.currentDocument?.url == firstURL.standardizedFileURL }
+    viewModel.open(secondURL)
+    await waitUntil { viewModel.currentDocument?.url == secondURL.standardizedFileURL }
+    viewModel.requestCloseTab(firstURL)
+
+    XCTAssertEqual(viewModel.currentDocument?.url, secondURL.standardizedFileURL)
+    XCTAssertEqual(viewModel.documentTabs.map(\.id), [secondURL.standardizedFileURL])
+    XCTAssertFalse(viewModel.isTabCloseConfirmationPresented)
   }
 
   @MainActor
@@ -660,13 +851,18 @@ final class ReaderViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.currentDocument?.content, "# Saved snapshot")
     XCTAssertEqual(viewModel.draftContent, "# New draft")
     XCTAssertTrue(viewModel.hasUnsavedChanges)
-    XCTAssertTrue(viewModel.isUnsavedChangesConfirmationPresented)
+    XCTAssertNotNil(viewModel.saveErrorMessage)
+    XCTAssertEqual(viewModel.documentTabs.count, 1)
     XCTAssertEqual(
       String(decoding: try Data(contentsOf: firstURL), as: UTF8.self),
       "# Saved snapshot"
     )
 
-    viewModel.cancelPendingDocumentOpen()
+    viewModel.open(secondURL)
+    await waitUntil { viewModel.currentDocument?.url == secondURL.standardizedFileURL }
+    viewModel.activateTab(firstURL)
+    XCTAssertEqual(viewModel.draftContent, "# New draft")
+    XCTAssertTrue(viewModel.hasUnsavedChanges)
   }
 
   @MainActor
@@ -833,7 +1029,8 @@ final class ReaderViewModelTests: XCTestCase {
     let viewModel = ReaderViewModel(
       bookmarkStore: InMemoryBookmarkStore(),
       workspaceWatcher: TestWorkspaceWatcher(),
-      draftRecoveryStore: recoveryStore
+      draftRecoveryStore: recoveryStore,
+      documentSessionStore: InMemoryDocumentSessionStore()
     )
 
     viewModel.restoreLibraryIfNeeded()
@@ -862,7 +1059,8 @@ final class ReaderViewModelTests: XCTestCase {
     let viewModel = ReaderViewModel(
       bookmarkStore: InMemoryBookmarkStore(),
       workspaceWatcher: TestWorkspaceWatcher(),
-      draftRecoveryStore: recoveryStore
+      draftRecoveryStore: recoveryStore,
+      documentSessionStore: InMemoryDocumentSessionStore()
     )
 
     viewModel.restoreLibraryIfNeeded()
@@ -893,7 +1091,8 @@ final class ReaderViewModelTests: XCTestCase {
       workspaceWatcher: TestWorkspaceWatcher(),
       draftRecoveryStore: InMemoryDraftRecoveryStore(
         record: DraftRecoveryRecord(document: document, draftContent: draftContent)
-      )
+      ),
+      documentSessionStore: InMemoryDocumentSessionStore()
     )
 
     viewModel.open(markdownURL)
@@ -965,7 +1164,8 @@ final class ReaderViewModelTests: XCTestCase {
     let viewModel = ReaderViewModel(
       bookmarkStore: InMemoryBookmarkStore(),
       workspaceWatcher: TestWorkspaceWatcher(),
-      draftRecoveryStore: recoveryStore
+      draftRecoveryStore: recoveryStore,
+      documentSessionStore: InMemoryDocumentSessionStore()
     )
 
     viewModel.restoreLibraryIfNeeded()
@@ -1250,6 +1450,37 @@ private final class InMemoryDraftRecoveryStore: DraftRecoveryStoring, @unchecked
   }
 
   func save(_ record: DraftRecoveryRecord) throws {
+    lock.lock()
+    storedRecord = record
+    lock.unlock()
+  }
+
+  func clear() throws {
+    lock.lock()
+    storedRecord = nil
+    lock.unlock()
+  }
+}
+
+private final class InMemoryDocumentSessionStore: DocumentSessionStoring, @unchecked Sendable {
+  private let lock = NSLock()
+  private var storedRecord: DocumentSessionRecord?
+
+  init(record: DocumentSessionRecord? = nil) {
+    storedRecord = record
+  }
+
+  var record: DocumentSessionRecord? {
+    lock.lock()
+    defer { lock.unlock() }
+    return storedRecord
+  }
+
+  func load() throws -> DocumentSessionRecord? {
+    record
+  }
+
+  func save(_ record: DocumentSessionRecord) throws {
     lock.lock()
     storedRecord = record
     lock.unlock()

@@ -39,3 +39,33 @@ describe('MarkdownView 图片资源', () => {
     expect(container.querySelector('img[alt="恶意"]')).toBeNull();
   });
 });
+
+describe('MarkdownView 文档内查找', () => {
+  it('高亮可见正文并报告匹配数量与活动项', () => {
+    const onMatchCountChange = vi.fn();
+    const { container, rerender } = render(
+      <MarkdownView
+        content={'# Needle\n\nneedle and NEEDLE'}
+        findQuery="needle"
+        activeFindMatch={1}
+        onFindMatchCountChange={onMatchCountChange}
+      />,
+    );
+
+    expect(container.querySelectorAll('mark.markdown-find-match')).toHaveLength(3);
+    expect(container.querySelector('[data-find-match="1"]')).toHaveClass('is-active');
+    expect(onMatchCountChange).toHaveBeenLastCalledWith(3);
+
+    rerender(
+      <MarkdownView
+        content={'# Needle\n\nneedle and NEEDLE'}
+        findQuery="needle"
+        findCaseSensitive
+        activeFindMatch={0}
+        onFindMatchCountChange={onMatchCountChange}
+      />,
+    );
+    expect(container.querySelectorAll('mark.markdown-find-match')).toHaveLength(1);
+    expect(onMatchCountChange).toHaveBeenLastCalledWith(1);
+  });
+});

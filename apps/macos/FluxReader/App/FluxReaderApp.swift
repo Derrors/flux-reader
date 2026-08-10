@@ -118,6 +118,36 @@ struct FluxReaderApp: App {
           viewModel.reloadFromDisk()
         }
         .disabled(viewModel.currentDocument == nil || viewModel.isSaving)
+
+        Divider()
+
+        Button("查找…") {
+          viewModel.presentFind()
+        }
+        .keyboardShortcut("f", modifiers: .command)
+        .disabled(viewModel.currentDocument == nil)
+
+        Button("查找并替换…") {
+          viewModel.presentFind(replace: true)
+        }
+        .keyboardShortcut("f", modifiers: [.command, .option])
+        .disabled(!viewModel.canEdit)
+
+        Divider()
+
+        Picker("文稿视图", selection: documentViewModeBinding) {
+          ForEach(ReaderViewModel.DocumentViewMode.allCases) { mode in
+            Label(mode.title, systemImage: mode.systemImage)
+              .tag(mode)
+          }
+        }
+        .disabled(viewModel.currentDocument == nil)
+
+        Button("关闭标签页") {
+          viewModel.closeActiveTab()
+        }
+        .keyboardShortcut("w", modifiers: .command)
+        .disabled(viewModel.activeTabID == nil)
       }
 
       CommandMenu("外观") {
@@ -129,6 +159,13 @@ struct FluxReaderApp: App {
         }
       }
     }
+  }
+
+  private var documentViewModeBinding: Binding<ReaderViewModel.DocumentViewMode> {
+    Binding(
+      get: { viewModel.documentViewMode },
+      set: { viewModel.setDocumentViewMode($0) }
+    )
   }
 }
 
@@ -158,7 +195,7 @@ final class FluxReaderApplicationDelegate: NSObject, NSApplicationDelegate {
         || viewModel.isDraftRecoverySyncing
         || viewModel.hasDraftRecoveryCleanupFailure
     else {
-      return .terminateNow
+      return viewModel.persistSessionForTermination() ? .terminateNow : .terminateCancel
     }
     guard !isTerminationPending else { return .terminateLater }
 
@@ -228,7 +265,7 @@ final class FluxReaderApplicationDelegate: NSObject, NSApplicationDelegate {
       beginTerminationAfterPendingWork(viewModel)
       return .terminateLater
     case .alertSecondButtonReturn:
-      return .terminateNow
+      return viewModel.persistSessionForTermination() ? .terminateNow : .terminateCancel
     default:
       return .terminateCancel
     }
@@ -248,9 +285,10 @@ final class FluxReaderApplicationDelegate: NSObject, NSApplicationDelegate {
       }
       guard !Task.isCancelled else { return }
 
-      let shouldTerminate =
+      let workCompleted =
         !viewModel.hasUnsavedChanges && viewModel.saveErrorMessage == nil
         && !viewModel.hasDraftRecoveryCleanupFailure
+      let shouldTerminate = workCompleted && viewModel.persistSessionForTermination()
       isTerminationPending = false
       terminationTask = nil
       NSApp.reply(toApplicationShouldTerminate: shouldTerminate)

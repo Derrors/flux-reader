@@ -242,3 +242,221 @@ final class DraftRecoveryPersistence: @unchecked Sendable {
     try store.clear()
   }
 }
+
+struct DocumentSessionTabRecord: Codable, Equatable, Sendable, Identifiable {
+  static let currentFormatVersion = 1
+
+  let formatVersion: Int
+  let sourceURL: URL
+  let sourceBookmark: Data?
+  let baselineModificationDate: Date?
+  let baselineByteCount: Int
+  let baselineContentDigest: String
+  let draftContent: String?
+  let isEditing: Bool
+  let isSplitView: Bool
+  let updatedAt: Date
+
+  var id: URL { sourceURL.standardizedFileURL }
+  var hasUnsavedChanges: Bool { draftContent != nil }
+
+  init(
+    document: MarkdownDocument,
+    draftContent: String,
+    isEditing: Bool,
+    isSplitView: Bool,
+    updatedAt: Date = Date()
+  ) {
+    let bookmark = try? document.url.bookmarkData(
+      options: .withSecurityScope,
+      includingResourceValuesForKeys: nil,
+      relativeTo: nil
+    )
+    self.formatVersion = Self.currentFormatVersion
+    self.sourceURL = document.url.standardizedFileURL
+    self.sourceBookmark = bookmark
+    self.baselineModificationDate = document.modificationDate
+    self.baselineByteCount = document.byteCount
+    self.baselineContentDigest = DraftRecoveryRecord.contentDigest(document.content)
+    self.draftContent = draftContent == document.content ? nil : draftContent
+    self.isEditing = isEditing
+    self.isSplitView = isSplitView
+    self.updatedAt = updatedAt
+  }
+
+  func resolvedSourceURL() throws -> URL {
+    guard let sourceBookmark else { return sourceURL.standardizedFileURL }
+    var isStale = false
+    return try URL(
+      resolvingBookmarkData: sourceBookmark,
+      options: [.withSecurityScope, .withoutUI],
+      relativeTo: nil,
+      bookmarkDataIsStale: &isStale
+    ).standardizedFileURL
+  }
+
+  func baselineMatches(_ document: MarkdownDocument) -> Bool {
+    document.byteCount == baselineByteCount
+      && DraftRecoveryRecord.contentDigest(document.content) == baselineContentDigest
+  }
+}
+
+struct DocumentSessionRecord: Codable, Equatable, Sendable {
+  static let currentFormatVersion = 1
+  static let maximumTabCount = 12
+
+  let formatVersion: Int
+  let tabs: [DocumentSessionTabRecord]
+  let activeTabURL: URL?
+  let updatedAt: Date
+
+  init(
+    tabs: [DocumentSessionTabRecord],
+    activeTabURL: URL?,
+    updatedAt: Date = Date()
+  ) {
+    self.formatVersion = Self.currentFormatVersion
+    self.tabs = Array(tabs.prefix(Self.maximumTabCount))
+    let normalizedActiveURL = activeTabURL?.standardizedFileURL
+    self.activeTabURL =
+      self.tabs.contains(where: { $0.id == normalizedActiveURL })
+      ? normalizedActiveURL : self.tabs.first?.id
+    self.updatedAt = updatedAt
+  }
+}
+
+protocol DocumentSessionStoring: Sendable {
+  func load() throws -> DocumentSessionRecord?
+  func save(_ record: DocumentSessionRecord) throws
+  func clear() throws
+}
+
+struct LocalDocumentSessionStore: DocumentSessionStoring {
+  static let maximumRecordSize = 28 * 1_024 * 1_024
+
+  let fileURL: URL
+
+  init(fileURL: URL? = nil) {
+    self.fileURL = (fileURL ?? Self.defaultFileURL()).standardizedFileURL
+  }
+
+  static func defaultFileURL(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> URL {
+    #if DEBUG
+      if environment["FLUX_READER_UI_TESTING"] == "1" {
+        let rawID = environment["FLUX_READER_UI_TEST_DOCUMENT_ID"] ?? "missing-test-id"
+        let testID = rawID.replacingOccurrences(
+          of: "[^A-Za-z0-9_-]",
+          with: "-",
+          options: .regularExpression
+        )
+        return FileManager.default.temporaryDirectory
+          .appendingPathComponent("FluxReaderUITests", isDirectory: true)
+          .appendingPathComponent(testID.isEmpty ? "missing-test-id" : testID, isDirectory: true)
+          .appendingPathComponent("Sessions", isDirectory: true)
+          .appendingPathComponent("document-session.json", isDirectory: false)
+      }
+    #endif
+
+    let applicationSupportURL =
+      FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+      ?? FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Application Support", isDirectory: true)
+    let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.derrors.FluxReader"
+    return
+      applicationSupportURL
+      .appendingPathComponent(bundleIdentifier, isDirectory: true)
+      .appendingPathComponent("Sessions", isDirectory: true)
+      .appendingPathComponent("document-session.json", isDirectory: false)
+  }
+
+  func load() throws -> DocumentSessionRecord? {
+    let path = fileURL.path(percentEncoded: false)
+    guard FileManager.default.fileExists(atPath: path) else { return nil }
+    let attributes = try FileManager.default.attributesOfItem(atPath: path)
+    guard
+      attributes[.type] as? FileAttributeType == .typeRegular,
+      let size = attributes[.size] as? NSNumber,
+      size.intValue <= Self.maximumRecordSize
+    else { throw CocoaError(.fileReadCorruptFile) }
+
+    let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
+    guard data.count <= Self.maximumRecordSize else { throw CocoaError(.fileReadTooLarge) }
+    let record = try JSONDecoder().decode(DocumentSessionRecord.self, from: data)
+    guard
+      record.formatVersion == DocumentSessionRecord.currentFormatVersion,
+      record.tabs.count <= DocumentSessionRecord.maximumTabCount,
+      record.tabs.allSatisfy({ tab in
+        tab.formatVersion == DocumentSessionTabRecord.currentFormatVersion
+          && tab.sourceURL.isFileURL
+          && MarkdownDocument.supports(tab.sourceURL)
+          && tab.baselineByteCount >= 0
+          && tab.draftContent.map {
+            $0.utf8.count <= LocalFileService.defaultMaximumFileSize
+          } ?? true
+      })
+    else { throw CocoaError(.fileReadCorruptFile) }
+    return record
+  }
+
+  func save(_ record: DocumentSessionRecord) throws {
+    let data = try JSONEncoder().encode(record)
+    guard data.count <= Self.maximumRecordSize else { throw CocoaError(.fileWriteOutOfSpace) }
+    let directoryURL = fileURL.deletingLastPathComponent()
+    try FileManager.default.createDirectory(
+      at: directoryURL,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700]
+    )
+    try data.write(to: fileURL, options: [.atomic])
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o600],
+      ofItemAtPath: fileURL.path(percentEncoded: false)
+    )
+  }
+
+  func clear() throws {
+    guard FileManager.default.fileExists(atPath: fileURL.path(percentEncoded: false)) else {
+      return
+    }
+    try FileManager.default.removeItem(at: fileURL)
+  }
+}
+
+final class DocumentSessionPersistence: @unchecked Sendable {
+  private let store: any DocumentSessionStoring
+  private let lock = NSLock()
+  private var generation: UInt64 = 0
+
+  init(store: any DocumentSessionStoring) {
+    self.store = store
+  }
+
+  func load() throws -> DocumentSessionRecord? {
+    lock.lock()
+    defer { lock.unlock() }
+    return try store.load()
+  }
+
+  func advanceGeneration() -> UInt64 {
+    lock.lock()
+    defer { lock.unlock() }
+    generation &+= 1
+    return generation
+  }
+
+  func save(_ record: DocumentSessionRecord, generation expectedGeneration: UInt64) throws {
+    lock.lock()
+    defer { lock.unlock() }
+    guard generation == expectedGeneration else { return }
+    try store.save(record)
+  }
+
+  func clear(generation expectedGeneration: UInt64) throws {
+    lock.lock()
+    defer { lock.unlock() }
+    guard generation == expectedGeneration else { return }
+    try store.clear()
+  }
+}

@@ -3,15 +3,26 @@ import SwiftUI
 
 struct MarkdownRendererView: View {
   let document: MarkdownDocument
+  var findQuery = ""
+  var findCaseSensitive = false
+  var activeFindMatch = 0
+  var targetScrollFraction: Double?
+  var onScrollFractionChange: @MainActor (Double) -> Void = { _ in }
 
   @State private var usesNativeFallback = false
 
   var body: some View {
     VStack(spacing: 0) {
       if WebMarkdownView.rendererURL != nil && !usesNativeFallback {
-        WebMarkdownView(document: document) {
-          usesNativeFallback = true
-        }
+        WebMarkdownView(
+          document: document,
+          findQuery: findQuery,
+          findCaseSensitive: findCaseSensitive,
+          activeFindMatch: activeFindMatch,
+          targetScrollFraction: targetScrollFraction,
+          onScrollFractionChange: onScrollFractionChange,
+          onFailure: { usesNativeFallback = true }
+        )
       } else {
         NativeMarkdownView(document: document)
       }

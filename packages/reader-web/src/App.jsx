@@ -5,6 +5,8 @@ import { api } from './api';
 import { initSdk, pickFolder, pickMarkdownFile, setTitle } from './trim-sdk';
 import WorkspaceSidebar from './components/WorkspaceSidebar';
 import Toc from './components/Toc';
+import DocumentFindBar, { findTextMatches, replaceTextMatch } from './components/DocumentFindBar';
+import DocumentTabs from './components/DocumentTabs';
 import {
   MAX_RECENT_DOCUMENTS,
   prependRecentDocument,
@@ -12,6 +14,11 @@ import {
   writeRecentDocuments,
 } from './recent-documents';
 import { readDraft, removeDraft, writeDraft } from './draft-storage';
+import {
+  MAX_DOCUMENT_TABS,
+  readDocumentSession,
+  writeDocumentSession,
+} from './document-session';
 
 const MAX_WORKSPACES = 8;
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
@@ -329,6 +336,15 @@ export default function App() {
   const [content, setContent] = useState(null);
   const [draft, setDraft] = useState(null);
   const [viewMode, setViewMode] = useState('preview');
+  const [tabs, setTabs] = useState([]);
+  const [activeTabId, setActiveTabId] = useState(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [replaceOpen, setReplaceOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [replaceQuery, setReplaceQuery] = useState('');
+  const [findCaseSensitive, setFindCaseSensitive] = useState(false);
+  const [activeFindMatch, setActiveFindMatch] = useState(0);
+  const [previewFindMatchCount, setPreviewFindMatchCount] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveNotice, setSaveNotice] = useState('');
   const [transitionPrompt, setTransitionPrompt] = useState(null);
@@ -381,10 +397,22 @@ export default function App() {
   const recoveryRef = useRef(null);
   const serverRecoveryRef = useRef(null);
   const transitionPromptRef = useRef(null);
+  const tabsRef = useRef(tabs);
+  const activeTabIdRef = useRef(activeTabId);
+  const editorRef = useRef(null);
+  const previewPaneRef = useRef(null);
+  const editorPaneRef = useRef(null);
+  const scrollSyncRef = useRef({ source: null });
+  const sessionRestoredRef = useRef(false);
   const isDirty = draft !== null && (
     content !== null
       ? draft !== content
       : current?.contentUnavailable === true
+  );
+  const searchableContent = draft ?? content ?? '';
+  const findMatches = useMemo(
+    () => findTextMatches(searchableContent, findQuery, findCaseSensitive),
+    [findCaseSensitive, findQuery, searchableContent],
   );
   envRef.current = env;
   workspacesRef.current = workspaces;
@@ -396,6 +424,8 @@ export default function App() {
   recoveryRef.current = recovery;
   serverRecoveryRef.current = serverRecovery;
   transitionPromptRef.current = transitionPrompt;
+  tabsRef.current = tabs;
+  activeTabIdRef.current = activeTabId;
 
   const updateConflict = useCallback((value) => {
     conflictRef.current = value;
@@ -412,6 +442,172 @@ export default function App() {
     setServerRecovery(value);
     setServerRecoveryError('');
   }, []);
+
+  useEffect(() => {
+    setActiveFindMatch((index) => (
+      findMatches.length === 0 ? 0 : Math.min(index, findMatches.length - 1)
+    ));
+  }, [findMatches.length, findQuery, findCaseSensitive]);
+
+  const selectFindMatchInEditor = useCallback((match) => {
+    const editor = editorRef.current;
+    if (!editor || !match) return;
+    editor.focus();
+    editor.setSelectionRange(match.start, match.end);
+    const lineCount = searchableContent.slice(0, match.start).split('\n').length;
+    const approximateLineHeight = 24;
+    editor.scrollTop = Math.max(0, (lineCount - 4) * approximateLineHeight);
+  }, [searchableContent]);
+
+  const navigateFind = useCallback((direction) => {
+    const matchCount = viewMode === 'preview' ? previewFindMatchCount : findMatches.length;
+    if (matchCount === 0) return;
+    setActiveFindMatch((previous) => {
+      const next = (previous + direction + matchCount) % matchCount;
+      if (viewMode !== 'preview') {
+        window.requestAnimationFrame(() => selectFindMatchInEditor(findMatches[next]));
+      }
+      return next;
+    });
+  }, [findMatches, previewFindMatchCount, selectFindMatchInEditor, viewMode]);
+
+  const commitDraftChange = useCallback((nextDraft, selection) => {
+    if (currentRef.current?.writable === false || typeof nextDraft !== 'string') return false;
+    draftRef.current = nextDraft;
+    dirtyRef.current = nextDraft !== contentRef.current;
+    setDraft(nextDraft);
+    setSaveNotice('');
+    if (selection) {
+      window.requestAnimationFrame(() => {
+        editorRef.current?.focus();
+        editorRef.current?.setSelectionRange(selection.start, selection.end);
+      });
+    }
+    return true;
+  }, []);
+
+  const replaceCurrentMatch = useCallback(() => {
+    const match = findMatches[activeFindMatch];
+    if (!match || currentRef.current?.writable === false) return;
+    const nextDraft = replaceTextMatch(searchableContent, match, replaceQuery);
+    if (viewMode === 'preview') setViewMode('edit');
+    commitDraftChange(nextDraft, {
+      start: match.start,
+      end: match.start + replaceQuery.length,
+    });
+  }, [
+    activeFindMatch,
+    commitDraftChange,
+    findMatches,
+    replaceQuery,
+    searchableContent,
+    viewMode,
+  ]);
+
+  const replaceAllMatches = useCallback(() => {
+    if (findMatches.length === 0 || currentRef.current?.writable === false) return;
+    let nextDraft = searchableContent;
+    for (let index = findMatches.length - 1; index >= 0; index -= 1) {
+      nextDraft = replaceTextMatch(nextDraft, findMatches[index], replaceQuery);
+    }
+    if (viewMode === 'preview') setViewMode('edit');
+    commitDraftChange(nextDraft, { start: 0, end: 0 });
+    setActiveFindMatch(0);
+  }, [commitDraftChange, findMatches, replaceQuery, searchableContent, viewMode]);
+
+  const syncDocumentScroll = useCallback((source, target) => {
+    if (!source || !target || scrollSyncRef.current.source) return;
+    const sourceMaximum = Math.max(source.scrollHeight - source.clientHeight, 0);
+    const targetMaximum = Math.max(target.scrollHeight - target.clientHeight, 0);
+    if (sourceMaximum <= 0 || targetMaximum <= 0) return;
+    scrollSyncRef.current.source = source;
+    target.scrollTop = (source.scrollTop / sourceMaximum) * targetMaximum;
+    window.requestAnimationFrame(() => {
+      if (scrollSyncRef.current.source === source) scrollSyncRef.current.source = null;
+    });
+  }, []);
+
+  const updateTabs = useCallback((updater) => {
+    const previous = tabsRef.current;
+    const next = typeof updater === 'function' ? updater(previous) : updater;
+    tabsRef.current = Array.isArray(next) ? next.slice(0, MAX_DOCUMENT_TABS) : previous;
+    setTabs(tabsRef.current);
+    return tabsRef.current;
+  }, []);
+
+  const activeTabSnapshot = useCallback(() => {
+    const document = currentRef.current;
+    if (!document?.path) return null;
+    return {
+      id: activeTabIdRef.current || document.path,
+      path: document.path,
+      actualPath: document.actualPath || null,
+      name: document.name || basename(document.path),
+      displayPath: document.displayPath || document.path,
+      type: 'file',
+      loaded: true,
+      document,
+      content: contentRef.current,
+      draft: draftRef.current,
+      viewMode,
+      saveNotice,
+      dirty: dirtyRef.current,
+    };
+  }, [saveNotice, viewMode]);
+
+  const persistTabDraft = useCallback((tab) => {
+    if (!tab?.dirty || typeof tab.draft !== 'string') return;
+    const actualPath = tab.document?.actualPath || tab.actualPath || tab.path;
+    if (!actualPath) return;
+    writeDraft(
+      envRef.current?.uid,
+      actualPath,
+      tab.draft,
+      tab.document?.revision ?? null,
+    );
+  }, []);
+
+  const captureActiveTab = useCallback(() => {
+    const snapshot = activeTabSnapshot();
+    if (!snapshot) return null;
+    persistTabDraft(snapshot);
+    updateTabs((previous) => {
+      const index = previous.findIndex((tab) => tab.id === snapshot.id);
+      if (index < 0) return [...previous, snapshot];
+      const next = [...previous];
+      next[index] = { ...next[index], ...snapshot };
+      return next;
+    });
+    return snapshot;
+  }, [activeTabSnapshot, persistTabDraft, updateTabs]);
+
+  const applyTabSnapshot = useCallback((tab) => {
+    if (!tab?.loaded || !tab.document) return false;
+    documentRequestSeqRef.current += 1;
+    documentOpenAbortRef.current?.abort();
+    documentPollAbortRef.current?.abort();
+    documentOpenAbortRef.current = null;
+    documentPollAbortRef.current = null;
+    currentRef.current = tab.document;
+    contentRef.current = tab.content;
+    draftRef.current = tab.draft;
+    dirtyRef.current = tab.dirty === true || tab.draft !== tab.content;
+    activeTabIdRef.current = tab.id;
+    setActiveTabId(tab.id);
+    setCurrent(tab.document);
+    setContent(tab.content);
+    setDraft(tab.draft);
+    setViewMode(tab.viewMode || 'preview');
+    setSaveNotice(tab.saveNotice || '');
+    updateConflict(null);
+    updateRecovery(null);
+    updateServerRecovery(null);
+    setError('');
+    setLoading(false);
+    setActiveFindMatch(0);
+    void setTitle(tab.document.name || tab.document.displayPath || 'Flux Reader');
+    return true;
+  }, [updateConflict, updateRecovery, updateServerRecovery]);
 
   const nextWorkspaceRequest = useCallback((path) => {
     const next = (workspaceRequestSeqRef.current.get(path) || 0) + 1;
@@ -748,6 +944,35 @@ export default function App() {
   }, [current?.actualPath, current?.path, current?.revision, draft, env?.uid, isDirty]);
 
   useEffect(() => {
+    const document = current;
+    const tabId = activeTabIdRef.current;
+    if (!document?.path || !tabId) return;
+    updateTabs((previous) => previous.map((tab) => (
+      tab.id === tabId
+        ? {
+          ...tab,
+          path: document.path,
+          actualPath: document.actualPath || null,
+          name: document.name || basename(document.path),
+          displayPath: document.displayPath || document.path,
+          loaded: true,
+          document,
+          content,
+          draft,
+          viewMode,
+          saveNotice,
+          dirty: isDirty,
+        }
+        : tab
+    )));
+  }, [content, current, draft, isDirty, saveNotice, updateTabs, viewMode]);
+
+  useEffect(() => {
+    if (!sessionRestoredRef.current || env?.uid == null) return;
+    writeDocumentSession(env.uid, tabs, activeTabId);
+  }, [activeTabId, env?.uid, tabs]);
+
+  useEffect(() => {
     const actualPath = current?.actualPath || current?.path;
     if (
       content !== null &&
@@ -778,9 +1003,35 @@ export default function App() {
       if (dirtyRef.current && actualPath && draftRef.current != null) {
         writeDraft(envRef.current?.uid, actualPath, draftRef.current, selected.revision);
       }
+      const activeId = activeTabIdRef.current;
+      const sessionTabs = tabsRef.current.map((tab) => (
+        tab.id === activeId && selected?.path
+          ? {
+            ...tab,
+            path: selected.path,
+            actualPath: selected.actualPath || null,
+            name: selected.name || basename(selected.path),
+            displayPath: selected.displayPath || selected.path,
+            dirty: dirtyRef.current,
+          }
+          : tab
+      ));
+      for (const tab of sessionTabs) {
+        const tabPath = tab.document?.actualPath || tab.actualPath || tab.path;
+        if (tab.dirty && typeof tab.draft === 'string' && tabPath) {
+          writeDraft(
+            envRef.current?.uid,
+            tabPath,
+            tab.draft,
+            tab.document?.revision ?? null,
+          );
+        }
+      }
+      writeDocumentSession(envRef.current?.uid, sessionTabs, activeId);
     };
     const onBeforeUnload = (event) => {
-      if (!dirtyRef.current) return;
+      const hasDirtyTab = dirtyRef.current || tabsRef.current.some((tab) => tab.dirty);
+      if (!hasDirtyTab) return;
       persistNow();
       event.preventDefault();
       event.returnValue = '';
@@ -796,13 +1047,39 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return;
-      event.preventDefault();
-      void saveCurrent();
+      const command = event.metaKey || event.ctrlKey;
+      if (!command) {
+        if (event.key === 'Escape' && findOpen) setFindOpen(false);
+        return;
+      }
+      switch (event.key.toLowerCase()) {
+      case 's':
+        event.preventDefault();
+        void saveCurrent();
+        break;
+      case 'f':
+        event.preventDefault();
+        setFindOpen(true);
+        setReplaceOpen(false);
+        break;
+      case 'h':
+        if (!currentRef.current) return;
+        event.preventDefault();
+        setFindOpen(true);
+        setReplaceOpen(true);
+        break;
+      case 'g':
+        if (!findOpen) return;
+        event.preventDefault();
+        navigateFind(event.shiftKey ? -1 : 1);
+        break;
+      default:
+        break;
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [saveCurrent]);
+  }, [findOpen, navigateFind, saveCurrent]);
 
   const reloadConflictFromDisk = useCallback(() => {
     const active = conflictRef.current;
@@ -1203,7 +1480,43 @@ export default function App() {
   }, []);
 
   /** Open a document with latest-wins semantics across files and retries. */
-  const openFile = useCallback(async (item, { standalone = false } = {}) => {
+  const openFile = useCallback(async (
+    item,
+    { standalone = false, forceReload = false, tabId = null } = {},
+  ) => {
+    const targetId = tabId || item.path;
+    const existingTab = tabsRef.current.find((tab) => (
+      tab.id === targetId ||
+      tab.path === item.path ||
+      (item.actualPath && (tab.actualPath === item.actualPath || tab.document?.actualPath === item.actualPath))
+    ));
+    if (!forceReload && existingTab?.loaded) {
+      captureActiveTab();
+      // captureActiveTab updates tabsRef synchronously. Re-read the target so
+      // a click on the already-open document cannot reapply a stale draft
+      // snapshot from before the latest editor change.
+      const refreshedTab = tabsRef.current.find((tab) => tab.id === existingTab.id);
+      applyTabSnapshot(refreshedTab || existingTab);
+      return true;
+    }
+    if (!existingTab && tabsRef.current.length >= MAX_DOCUMENT_TABS) {
+      setError(`最多同时打开 ${MAX_DOCUMENT_TABS} 个文稿，请先关闭一个标签页。`);
+      return false;
+    }
+    const previousTabId = activeTabIdRef.current;
+    const createdPlaceholder = !existingTab;
+    if (createdPlaceholder) {
+      updateTabs((previous) => [...previous, {
+        id: targetId,
+        path: item.path,
+        actualPath: item.actualPath || null,
+        name: item.name || basename(item.path),
+        displayPath: item.displayPath || item.path,
+        type: 'file',
+        loaded: false,
+        dirty: false,
+      }]);
+    }
     const requestSeq = ++documentRequestSeqRef.current;
     documentOpenAbortRef.current?.abort();
     documentPollAbortRef.current?.abort();
@@ -1215,8 +1528,11 @@ export default function App() {
     try {
       const result = await api.file(item.path, { signal: controller.signal });
       if (requestSeq !== documentRequestSeqRef.current) return false;
+      if (!result || typeof result !== 'object' || typeof result.content !== 'string') {
+        throw new Error('文件服务返回了无效的文稿内容');
+      }
 
-      const text = typeof result.content === 'string' ? result.content : '';
+      const text = result.content;
       const actualPath = result.actualPath || item.actualPath || item.path;
       const workspace = deepestWorkspace(workspacesRef.current, actualPath);
       const nextCurrent = {
@@ -1259,6 +1575,9 @@ export default function App() {
       } else if (storedDraft) {
         nextRecovery = { draft: storedDraft, diskContent: text, diskDocument: nextCurrent };
       }
+      captureActiveTab();
+      activeTabIdRef.current = existingTab?.id || targetId;
+      setActiveTabId(activeTabIdRef.current);
       currentRef.current = nextCurrent;
       contentRef.current = text;
       draftRef.current = nextDraft;
@@ -1278,6 +1597,25 @@ export default function App() {
       }
       setViewMode('preview');
       setSaveNotice(nextSaveNotice);
+      updateTabs((previous) => previous.map((tab) => (
+        tab.id === activeTabIdRef.current
+          ? {
+            ...tab,
+            id: activeTabIdRef.current,
+            path: nextCurrent.path,
+            actualPath: nextCurrent.actualPath,
+            name: nextCurrent.name,
+            displayPath: nextCurrent.displayPath,
+            loaded: true,
+            document: nextCurrent,
+            content: text,
+            draft: nextDraft,
+            viewMode: 'preview',
+            saveNotice: nextSaveNotice,
+            dirty: nextDraft !== text,
+          }
+          : tab
+      )));
       recordRecent(nextCurrent);
       await setTitle(nextCurrent.name || nextCurrent.displayPath || 'Flux Reader');
       if (requestSeq !== documentRequestSeqRef.current) return false;
@@ -1338,6 +1676,9 @@ export default function App() {
               contentUnavailable: true,
               contentUnavailableReason: err.message,
             };
+            captureActiveTab();
+            activeTabIdRef.current = existingTab?.id || targetId;
+            setActiveTabId(activeTabIdRef.current);
             currentRef.current = recoveryDocument;
             contentRef.current = null;
             draftRef.current = null;
@@ -1366,6 +1707,19 @@ export default function App() {
                 ? '磁盘正文无法直接读取，请先处理服务端恢复版本'
                 : '已找到服务端恢复记录；恢复前将重新获取磁盘 revision'
               : '磁盘正文无法预览；已找到可继续编辑的本地草稿');
+            updateTabs((previous) => previous.map((tab) => (
+              tab.id === activeTabIdRef.current
+                ? {
+                  ...tab,
+                  loaded: true,
+                  document: recoveryDocument,
+                  content: null,
+                  draft: null,
+                  viewMode: 'preview',
+                  dirty: Boolean(storedDraft),
+                }
+                : tab
+            )));
             await setTitle(recoveryDocument.name || recoveryDocument.displayPath || 'Flux Reader');
             if (requestSeq !== documentRequestSeqRef.current) return false;
             if (standalone) {
@@ -1383,6 +1737,13 @@ export default function App() {
           // inode-matching recovery record can be established.
         }
       }
+      if (createdPlaceholder) {
+        updateTabs((previous) => previous.filter((tab) => tab.id !== targetId));
+      }
+      if (previousTabId && activeTabIdRef.current !== previousTabId) {
+        const previous = tabsRef.current.find((tab) => tab.id === previousTabId);
+        if (previous?.loaded) applyTabSnapshot(previous);
+      }
       return false;
     } finally {
       if (documentOpenAbortRef.current === controller) {
@@ -1391,22 +1752,117 @@ export default function App() {
       if (requestSeq === documentRequestSeqRef.current) setLoading(false);
     }
   }, [
+    applyTabSnapshot,
+    captureActiveTab,
     nextWorkspaceRequest,
     recordRecent,
+    updateTabs,
     updateConflict,
     updateRecovery,
     updateServerRecovery,
   ]);
 
   const openFileWithGuard = useCallback(async (item, options = {}) => {
+    if (savingRef.current) {
+      setError('当前文稿正在保存，请稍后再打开其他文稿。');
+      return false;
+    }
     const selectedPath = currentRef.current?.actualPath || currentRef.current?.path;
     const targetPath = item?.actualPath || item?.path;
+    if (selectedPath !== targetPath || options.forceReload !== true) {
+      return openFile(item, options);
+    }
     const message = selectedPath === targetPath
       ? '重新加载当前文稿前，需要处理尚未保存的修改。'
       : '打开其他文稿前，需要处理当前尚未保存的修改。';
     if (!await confirmDocumentTransition(message)) return false;
     return openFile(item, options);
   }, [confirmDocumentTransition, openFile]);
+
+  const activateTab = useCallback(async (tabId) => {
+    if (!tabId || tabId === activeTabIdRef.current) return true;
+    if (
+      savingRef.current || conflictRef.current || recoveryRef.current ||
+      serverRecoveryRef.current || transitionPromptRef.current
+    ) {
+      setError('请先完成当前文稿操作，再切换标签页。');
+      return false;
+    }
+    const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+    if (!tab) return false;
+    captureActiveTab();
+    if (tab.loaded) return applyTabSnapshot(tab);
+    return openFile(tab, { tabId: tab.id });
+  }, [applyTabSnapshot, captureActiveTab, openFile]);
+
+  const clearActiveDocument = useCallback(() => {
+    documentRequestSeqRef.current += 1;
+    documentOpenAbortRef.current?.abort();
+    documentPollAbortRef.current?.abort();
+    currentRef.current = null;
+    contentRef.current = null;
+    draftRef.current = null;
+    dirtyRef.current = false;
+    activeTabIdRef.current = null;
+    setCurrent(null);
+    setContent(null);
+    setDraft(null);
+    setActiveTabId(null);
+    setViewMode('preview');
+    setSaveNotice('');
+    updateConflict(null);
+    updateRecovery(null);
+    updateServerRecovery(null);
+    setFindOpen(false);
+    void setTitle('Flux Reader');
+  }, [updateConflict, updateRecovery, updateServerRecovery]);
+
+  const closeTab = useCallback(async (tabId) => {
+    let tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+    if (!tab) return false;
+    if (tabId !== activeTabIdRef.current) {
+      const tabIsDirty = tab.dirty === true || (
+        typeof tab.draft === 'string' && typeof tab.content === 'string'
+          ? tab.draft !== tab.content
+          : false
+      );
+      if (!tabIsDirty) {
+        updateTabs((previous) => previous.filter((candidate) => candidate.id !== tabId));
+        return true;
+      }
+      if (!await activateTab(tabId)) return false;
+      tab = tabsRef.current.find((candidate) => candidate.id === tabId) || tab;
+    }
+    if (dirtyRef.current) {
+      const proceed = await confirmDocumentTransition(
+        `关闭“${tab.name || tab.path}”前，需要处理尚未保存的修改。`,
+      );
+      if (!proceed) return false;
+    }
+
+    const previousTabs = tabsRef.current;
+    const index = previousTabs.findIndex((candidate) => candidate.id === tabId);
+    const remaining = previousTabs.filter((candidate) => candidate.id !== tabId);
+    updateTabs(remaining);
+    if (remaining.length === 0) {
+      clearActiveDocument();
+      return true;
+    }
+    const nextTab = remaining[Math.min(index, remaining.length - 1)];
+    if (nextTab.loaded) {
+      applyTabSnapshot(nextTab);
+      return true;
+    }
+    clearActiveDocument();
+    return openFile(nextTab, { tabId: nextTab.id });
+  }, [
+    activateTab,
+    applyTabSnapshot,
+    clearActiveDocument,
+    confirmDocumentTransition,
+    openFile,
+    updateTabs,
+  ]);
 
   const openFolderPath = useCallback(async (rawPath) => {
     if (isFileLaunch) return false;
@@ -1898,6 +2354,23 @@ export default function App() {
     );
   }, [env, openFile]);
 
+  useEffect(() => {
+    if (!env || sessionRestoredRef.current) return;
+    if (launchPathRef.current) {
+      sessionRestoredRef.current = true;
+      return;
+    }
+    const session = readDocumentSession(env.uid);
+    sessionRestoredRef.current = true;
+    if (session.tabs.length === 0) return;
+    const restoredTabs = session.tabs.map((tab) => ({ ...tab, loaded: false }));
+    tabsRef.current = restoredTabs;
+    setTabs(restoredTabs);
+    const targetId = session.activeId || restoredTabs[0].id;
+    const target = restoredTabs.find((tab) => tab.id === targetId) || restoredTabs[0];
+    void openFile(target, { tabId: target.id });
+  }, [env, openFile]);
+
   const workspaceSearchSignature = JSON.stringify(
     workspaces.map((workspace) => [
       workspace.path,
@@ -2035,7 +2508,7 @@ export default function App() {
   const renderedContent = draft ?? content;
   const toc = useMemo(
     () => (
-      viewMode === 'preview' && typeof renderedContent === 'string' && renderedContent
+      viewMode !== 'edit' && typeof renderedContent === 'string' && renderedContent
         ? extractToc(renderedContent)
         : []
     ),
@@ -2088,19 +2561,29 @@ export default function App() {
         <div className="app-header-actions">
           {hasDocument && (
             <>
+              <div className="view-mode-control" role="group" aria-label="文稿视图">
+                {['preview', 'edit', 'split'].map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={viewMode === mode ? 'is-active' : undefined}
+                    aria-pressed={viewMode === mode}
+                    disabled={mode !== 'preview' && current?.writable === false}
+                    onClick={() => setViewMode(mode)}
+                  >
+                    {mode === 'edit' && current?.writable === false
+                      ? '只读'
+                      : { preview: '预览', edit: '编辑', split: '分栏' }[mode]}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
-                onClick={() => setViewMode((value) => (
-                  value === 'preview' ? 'edit' : 'preview'
-                ))}
-                disabled={viewMode === 'preview' && current?.writable === false}
-                title={current?.writable === false
-                  ? '当前文稿只读，请先在 fnOS 应用设置中授予读写权限'
-                  : undefined}
+                aria-pressed={findOpen}
+                title="文档内查找（⌘/Ctrl+F）"
+                onClick={() => setFindOpen((value) => !value)}
               >
-                {viewMode === 'preview'
-                  ? (current?.writable === false ? '只读' : '编辑')
-                  : '预览'}
+                查找
               </button>
               <button
                 type="button"
@@ -2144,6 +2627,46 @@ export default function App() {
         </div>
       </header>
 
+      <DocumentTabs
+        tabs={tabs}
+        activeId={activeTabId}
+        disabled={saving || Boolean(conflict || recovery || serverRecovery || transitionPrompt)}
+        onActivate={(tabId) => void activateTab(tabId)}
+        onClose={(tabId) => void closeTab(tabId)}
+      />
+
+      {hasDocument && findOpen && (
+        <DocumentFindBar
+          query={findQuery}
+          replacement={replaceQuery}
+          replaceVisible={replaceOpen}
+          caseSensitive={findCaseSensitive}
+          currentIndex={activeFindMatch}
+          matchCount={viewMode === 'preview' ? previewFindMatchCount : findMatches.length}
+          canReplace={current?.writable !== false}
+          onQueryChange={(value) => {
+            setFindQuery(value);
+            setActiveFindMatch(0);
+          }}
+          onReplacementChange={setReplaceQuery}
+          onToggleReplace={() => {
+            setReplaceOpen((value) => {
+              const next = !value;
+              if (next && viewMode === 'preview' && current?.writable !== false) {
+                setViewMode('edit');
+              }
+              return next;
+            });
+          }}
+          onToggleCase={() => setFindCaseSensitive((value) => !value)}
+          onPrevious={() => navigateFind(-1)}
+          onNext={() => navigateFind(1)}
+          onReplace={replaceCurrentMatch}
+          onReplaceAll={replaceAllMatches}
+          onClose={() => setFindOpen(false)}
+        />
+      )}
+
       <div className="app-body">
         {showSidebar && (
           <aside className="app-sidebar">
@@ -2167,7 +2690,7 @@ export default function App() {
           </aside>
         )}
 
-        <main className="app-main">
+        <main className={`app-main${viewMode === 'split' ? ' is-split' : ''}`}>
           {error && (
             <div className="notice notice-error">
               <strong>提示：</strong>
@@ -2206,30 +2729,73 @@ export default function App() {
               content={renderedContent}
               theme={theme}
               resolveImageSource={current?.path ? resolveImageSource : undefined}
+              findQuery={findOpen ? findQuery : ''}
+              findCaseSensitive={findCaseSensitive}
+              activeFindMatch={activeFindMatch}
+              onFindMatchCountChange={setPreviewFindMatchCount}
             />
           )}
 
           {hasDocument && viewMode === 'edit' && (
             <textarea
+              ref={editorRef}
               className="markdown-editor"
               aria-label="Markdown 编辑器"
               value={draft ?? ''}
               readOnly={current?.writable === false}
-              onChange={(event) => {
-                const nextDraft = event.target.value;
-                draftRef.current = nextDraft;
-                dirtyRef.current = nextDraft !== contentRef.current;
-                setDraft(nextDraft);
-                setSaveNotice('');
-              }}
+              onChange={(event) => commitDraftChange(event.target.value)}
               spellCheck="false"
               autoCapitalize="off"
               autoCorrect="off"
             />
           )}
+
+          {hasDocument && viewMode === 'split' && (
+            <div className="document-split" aria-label="编辑与预览分栏">
+              <section className="document-split-pane editor-pane" aria-label="编辑器面板">
+                <textarea
+                  ref={(node) => {
+                    editorRef.current = node;
+                    editorPaneRef.current = node;
+                  }}
+                  className="markdown-editor split-editor"
+                  aria-label="Markdown 编辑器"
+                  value={draft ?? ''}
+                  readOnly={current?.writable === false}
+                  onChange={(event) => commitDraftChange(event.target.value)}
+                  onScroll={(event) => syncDocumentScroll(
+                    event.currentTarget,
+                    previewPaneRef.current,
+                  )}
+                  spellCheck="false"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                />
+              </section>
+              <section
+                ref={previewPaneRef}
+                className="document-split-pane preview-pane"
+                aria-label="预览面板"
+                onScroll={(event) => syncDocumentScroll(
+                  event.currentTarget,
+                  editorPaneRef.current,
+                )}
+              >
+                <MarkdownView
+                  content={renderedContent}
+                  theme={theme}
+                  resolveImageSource={current?.path ? resolveImageSource : undefined}
+                  findQuery={findOpen ? findQuery : ''}
+                  findCaseSensitive={findCaseSensitive}
+                  activeFindMatch={activeFindMatch}
+                  onFindMatchCountChange={setPreviewFindMatchCount}
+                />
+              </section>
+            </div>
+          )}
         </main>
 
-        {hasDocument && viewMode === 'preview' && toc.length > 1 && (
+        {hasDocument && viewMode !== 'edit' && toc.length > 1 && (
           <aside className={`app-toc${tocPinned ? ' is-pinned' : ''}`}>
             <div className="app-toc-panel">
               <Toc

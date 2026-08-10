@@ -14,12 +14,31 @@ import './styles/macos.css';
 
 let pendingPayload = { ...DEFAULT_RENDER_PAYLOAD };
 let renderListener = null;
+let pendingScrollFraction = null;
+
+function rendererScrollElement() {
+  return globalThis.document?.querySelector('.macos-renderer-scroll') || null;
+}
+
+function applyScrollFraction(value) {
+  const fraction = Number(value);
+  if (!Number.isFinite(fraction)) return false;
+  pendingScrollFraction = Math.min(1, Math.max(0, fraction));
+  const element = rendererScrollElement();
+  if (!element) return false;
+  const maximum = Math.max(element.scrollHeight - element.clientHeight, 0);
+  element.scrollTop = maximum * pendingScrollFraction;
+  return true;
+}
 
 globalThis.fluxReader = Object.freeze({
   render(value) {
     pendingPayload = normalizeRenderPayload(value);
     renderListener?.(pendingPayload);
     return true;
+  },
+  setScrollFraction(value) {
+    return applyScrollFraction(value);
   },
 });
 
@@ -45,6 +64,27 @@ function MacOSRenderer() {
     globalThis.document.title = renderState.title;
   }, [renderState.theme, renderState.title]);
 
+  useEffect(() => {
+    const element = rendererScrollElement();
+    if (!element) return undefined;
+    if (pendingScrollFraction != null) applyScrollFraction(pendingScrollFraction);
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = globalThis.requestAnimationFrame(() => {
+        frame = 0;
+        const maximum = Math.max(element.scrollHeight - element.clientHeight, 0);
+        const fraction = maximum > 0 ? element.scrollTop / maximum : 0;
+        globalThis.webkit?.messageHandlers?.scrollPosition?.postMessage(fraction);
+      });
+    };
+    element.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      element.removeEventListener('scroll', onScroll);
+      if (frame) globalThis.cancelAnimationFrame(frame);
+    };
+  }, [renderState.content]);
+
   return <MacOSDocumentView renderState={renderState} />;
 }
 
@@ -69,6 +109,9 @@ export function MacOSDocumentView({ renderState }) {
               content={renderState.content}
               theme={renderState.theme}
               resolveImageSource={resolveImageSource}
+              findQuery={renderState.findQuery}
+              findCaseSensitive={renderState.findCaseSensitive}
+              activeFindMatch={renderState.activeFindMatch}
             />
           ) : (
             <p className="macos-empty-document">空白文稿</p>

@@ -14,18 +14,45 @@ struct WebMarkdownView: NSViewRepresentable {
   )!
 
   let document: MarkdownDocument
+  let findQuery: String
+  let findCaseSensitive: Bool
+  let activeFindMatch: Int
+  let targetScrollFraction: Double?
+  let onScrollFractionChange: @MainActor (Double) -> Void
   let onFailure: @MainActor () -> Void
 
   @Environment(\.colorScheme) private var colorScheme
 
+  init(
+    document: MarkdownDocument,
+    findQuery: String = "",
+    findCaseSensitive: Bool = false,
+    activeFindMatch: Int = 0,
+    targetScrollFraction: Double? = nil,
+    onScrollFractionChange: @escaping @MainActor (Double) -> Void = { _ in },
+    onFailure: @escaping @MainActor () -> Void
+  ) {
+    self.document = document
+    self.findQuery = findQuery
+    self.findCaseSensitive = findCaseSensitive
+    self.activeFindMatch = activeFindMatch
+    self.targetScrollFraction = targetScrollFraction
+    self.onScrollFractionChange = onScrollFractionChange
+    self.onFailure = onFailure
+  }
+
   func makeCoordinator() -> Coordinator {
-    Coordinator(onFailure: onFailure)
+    Coordinator(
+      onScrollFractionChange: onScrollFractionChange,
+      onFailure: onFailure
+    )
   }
 
   func makeNSView(context: Context) -> WKWebView {
     let contentController = WKUserContentController()
     contentController.add(context.coordinator, name: Coordinator.readyHandlerName)
     contentController.add(context.coordinator, name: Coordinator.copyTextHandlerName)
+    contentController.add(context.coordinator, name: Coordinator.scrollHandlerName)
 
     guard
       let configuration = Self.makeConfiguration(
@@ -43,14 +70,29 @@ struct WebMarkdownView: NSViewRepresentable {
     webView.uiDelegate = context.coordinator
 
     context.coordinator.attach(to: webView)
-    context.coordinator.update(document: document, theme: rendererTheme)
+    context.coordinator.update(
+      document: document,
+      theme: rendererTheme,
+      findQuery: findQuery,
+      findCaseSensitive: findCaseSensitive,
+      activeFindMatch: activeFindMatch,
+      targetScrollFraction: targetScrollFraction
+    )
     context.coordinator.loadRenderer()
     return webView
   }
 
   func updateNSView(_ webView: WKWebView, context: Context) {
     context.coordinator.onFailure = onFailure
-    context.coordinator.update(document: document, theme: rendererTheme)
+    context.coordinator.onScrollFractionChange = onScrollFractionChange
+    context.coordinator.update(
+      document: document,
+      theme: rendererTheme,
+      findQuery: findQuery,
+      findCaseSensitive: findCaseSensitive,
+      activeFindMatch: activeFindMatch,
+      targetScrollFraction: targetScrollFraction
+    )
   }
 
   static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -88,7 +130,9 @@ struct WebMarkdownView: NSViewRepresentable {
   {
     static let readyHandlerName = "rendererReady"
     static let copyTextHandlerName = "copyText"
+    static let scrollHandlerName = "scrollPosition"
 
+    var onScrollFractionChange: @MainActor (Double) -> Void
     var onFailure: @MainActor () -> Void
     let documentResourceHandler = DocumentResourceSchemeHandler()
 
@@ -99,8 +143,14 @@ struct WebMarkdownView: NSViewRepresentable {
     private var didReportFailure = false
     private var lastResourceDocument: MarkdownDocument?
     private var resourceToken = UUID().uuidString
+    private var lastTargetScrollFraction: Double?
+    private var pendingTargetScrollFraction: Double?
 
-    init(onFailure: @escaping @MainActor () -> Void) {
+    init(
+      onScrollFractionChange: @escaping @MainActor (Double) -> Void,
+      onFailure: @escaping @MainActor () -> Void
+    ) {
+      self.onScrollFractionChange = onScrollFractionChange
       self.onFailure = onFailure
     }
 
@@ -115,12 +165,22 @@ struct WebMarkdownView: NSViewRepresentable {
       webView.configuration.userContentController.removeScriptMessageHandler(
         forName: Self.copyTextHandlerName
       )
+      webView.configuration.userContentController.removeScriptMessageHandler(
+        forName: Self.scrollHandlerName
+      )
       webView.navigationDelegate = nil
       webView.uiDelegate = nil
       self.webView = nil
     }
 
-    func update(document: MarkdownDocument, theme: String) {
+    func update(
+      document: MarkdownDocument,
+      theme: String,
+      findQuery: String,
+      findCaseSensitive: Bool,
+      activeFindMatch: Int,
+      targetScrollFraction: Double?
+    ) {
       if document != lastResourceDocument {
         resourceToken = UUID().uuidString
         lastResourceDocument = document
@@ -133,9 +193,13 @@ struct WebMarkdownView: NSViewRepresentable {
         content: document.content,
         title: document.displayName,
         theme: theme,
-        resourceToken: resourceToken
+        resourceToken: resourceToken,
+        findQuery: findQuery,
+        findCaseSensitive: findCaseSensitive,
+        activeFindMatch: activeFindMatch
       )
       renderIfReady()
+      updateScrollFraction(targetScrollFraction)
     }
 
     func loadRenderer() {
@@ -155,8 +219,18 @@ struct WebMarkdownView: NSViewRepresentable {
       case Self.readyHandlerName:
         rendererReady = true
         renderIfReady()
+        updateScrollFraction(pendingTargetScrollFraction)
       case Self.copyTextHandlerName:
         copyText(message.body)
+      case Self.scrollHandlerName:
+        if let value = message.body as? NSNumber {
+          let fraction = min(1, max(0, value.doubleValue))
+          // Keep the cache aligned with the renderer's actual position. If a
+          // user scrolls the preview after a programmatic sync, a later editor
+          // scroll may legitimately request the old fraction again.
+          lastTargetScrollFraction = fraction
+          onScrollFractionChange(fraction)
+        }
       default:
         break
       }
@@ -224,6 +298,9 @@ struct WebMarkdownView: NSViewRepresentable {
         "title": pendingPayload.title,
         "theme": pendingPayload.theme,
         "resourceToken": pendingPayload.resourceToken,
+        "findQuery": pendingPayload.findQuery,
+        "findCaseSensitive": pendingPayload.findCaseSensitive,
+        "activeFindMatch": pendingPayload.activeFindMatch,
       ]
 
       Task { @MainActor [weak self, weak webView] in
@@ -232,6 +309,28 @@ struct WebMarkdownView: NSViewRepresentable {
           _ = try await webView.callAsyncJavaScript(
             "globalThis.fluxReader.render(payload)",
             arguments: ["payload": arguments],
+            contentWorld: .page
+          )
+        } catch {
+          self.reportFailure()
+        }
+      }
+    }
+
+    private func updateScrollFraction(_ value: Double?) {
+      pendingTargetScrollFraction = value
+      guard rendererReady, let webView, let value else { return }
+      let fraction = min(1, max(0, value))
+      if let lastTargetScrollFraction, abs(lastTargetScrollFraction - fraction) < 0.002 {
+        return
+      }
+      lastTargetScrollFraction = fraction
+      Task { @MainActor [weak self, weak webView] in
+        guard let self, let webView else { return }
+        do {
+          _ = try await webView.callAsyncJavaScript(
+            "globalThis.fluxReader.setScrollFraction(fraction)",
+            arguments: ["fraction": fraction],
             contentWorld: .page
           )
         } catch {
@@ -275,6 +374,9 @@ private struct RenderPayload: Equatable {
   let title: String
   let theme: String
   let resourceToken: String
+  let findQuery: String
+  let findCaseSensitive: Bool
+  let activeFindMatch: Int
 }
 
 @MainActor
