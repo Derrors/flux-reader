@@ -334,7 +334,13 @@ final class ReaderViewModel: ObservableObject {
     Task { [weak self] in
       do {
         let urls = try await Task.detached(priority: .userInitiated) {
-          let recoveryURL = try version.resolvedRecoveryURL()
+          // A security-scoped bookmark can become stale across ad-hoc builds,
+          // app updates, or restored test containers. The durable manifest URL
+          // is still safe to try: LocalFileService performs its normal file and
+          // symlink validation, and sandbox access remains fail-closed.
+          let recoveryURL =
+            (try? version.resolvedRecoveryURL())
+            ?? version.recoveryURL.standardizedFileURL
           let sourceURL =
             (try? version.resolvedSourceURL()) ?? version.sourceURL.standardizedFileURL
           return (recoveryURL, sourceURL)

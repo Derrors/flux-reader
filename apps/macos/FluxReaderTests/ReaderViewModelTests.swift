@@ -122,6 +122,7 @@ final class ReaderViewModelTests: XCTestCase {
       sourceURL: normalURL,
       sourceBookmark: nil,
       recoveryURL: recoveryURL,
+      recoveryBookmark: Data("invalid bookmark".utf8),
       byteCount: Data("# Recovery".utf8).count,
       contentDigest: "recovery",
       state: .retained
