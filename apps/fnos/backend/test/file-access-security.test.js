@@ -163,7 +163,9 @@ test('binds exact file ACL to an injected stable fd path across an ABA swap', as
 
   const result = await fileAccess.readMarkdown('1000', target);
   assert.equal(result.content, '# original');
-  assert.equal(stableQueries.length, 1);
+  // 事务屏障前后各重验一次，同一个稳定 fd ACL 路径不能退回 pathname。
+  assert.equal(stableQueries.length, 2);
+  assert.ok(stableQueries.every((query) => query === stableQueries[0]));
   assert.notEqual(stableQueries[0], target);
 });
 

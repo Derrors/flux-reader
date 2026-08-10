@@ -1,7 +1,43 @@
+import SwiftUI
 import WebKit
 import XCTest
 
 @testable import FluxReader
+
+final class AppAppearanceTests: XCTestCase {
+  func testAppearanceOptionsAndPreferredColorSchemes() {
+    XCTAssertEqual(AppAppearance.defaultValue, .light)
+    XCTAssertEqual(AppAppearance.allCases, [.system, .light, .dark])
+    XCTAssertNil(AppAppearance.system.preferredColorScheme)
+    XCTAssertEqual(AppAppearance.light.preferredColorScheme, .light)
+    XCTAssertEqual(AppAppearance.dark.preferredColorScheme, .dark)
+  }
+
+  func testAppearancePersistsThroughAppStorage() throws {
+    let suiteName = "AppAppearanceTests.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let storage = AppStorage(
+      wrappedValue: AppAppearance.defaultValue,
+      AppAppearance.storageKey,
+      store: defaults
+    )
+
+    XCTAssertEqual(storage.wrappedValue, .light)
+    storage.wrappedValue = .dark
+    XCTAssertEqual(defaults.string(forKey: AppAppearance.storageKey), AppAppearance.dark.rawValue)
+
+    let restoredStorage = AppStorage(
+      wrappedValue: AppAppearance.defaultValue,
+      AppAppearance.storageKey,
+      store: defaults
+    )
+    XCTAssertEqual(restoredStorage.wrappedValue, .dark)
+    restoredStorage.wrappedValue = .system
+    XCTAssertEqual(defaults.string(forKey: AppAppearance.storageKey), AppAppearance.system.rawValue)
+  }
+}
 
 final class WebRendererTests: XCTestCase {
   @MainActor
@@ -18,8 +54,8 @@ final class WebRendererTests: XCTestCase {
       rootURL: rendererURL.deletingLastPathComponent()
     )
     XCTAssertEqual(
-      schemeHandler.resourceURL(for: WebMarkdownView.rendererEntryURL),
-      rendererURL
+      schemeHandler.resourceURL(for: WebMarkdownView.rendererEntryURL)?.resolvingSymlinksInPath(),
+      rendererURL.resolvingSymlinksInPath()
     )
     XCTAssertNil(
       schemeHandler.resourceURL(

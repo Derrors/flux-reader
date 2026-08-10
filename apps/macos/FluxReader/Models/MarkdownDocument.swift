@@ -43,4 +43,15 @@ struct MarkdownDocument: Identifiable, Equatable, Sendable {
       resourceRevision: resourceRevision
     )
   }
+
+  func withContent(_ content: String) -> MarkdownDocument {
+    MarkdownDocument(
+      url: url,
+      content: content,
+      byteCount: content.utf8.count,
+      modificationDate: modificationDate,
+      resourceRootURL: resourceRootURL,
+      resourceRevision: resourceRevision
+    )
+  }
 }

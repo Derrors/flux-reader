@@ -170,6 +170,12 @@ button.icon-btn { border: none; font-size: 16px; padding: 4px 8px; }
 }
 
 /* ---------- 文件树 ---------- */
+.file-tree,
+.tree-children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
 .file-tree { display: flex; flex-direction: column; }
 
 .tree-item {
@@ -314,3 +320,205 @@ button.icon-btn { border: none; font-size: 16px; padding: 4px 8px; }
 .empty-state { max-width: 520px; margin: 80px auto; text-align: center; }
 .empty-state h2 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
 .empty-state p { font-size: 13px; color: var(--f-text-tertiary); line-height: 1.7; margin: 0; }
+
+/* ---------- 编辑、保存与防丢稿 ---------- */
+.save-status {
+  margin: -10px 0 12px;
+  color: var(--f-text-tertiary);
+  font-size: 11.5px;
+  text-align: right;
+}
+
+.markdown-editor {
+  display: block;
+  width: 100%;
+  min-height: calc(100vh - var(--f-header-h) - 128px);
+  resize: vertical;
+  padding: 20px 22px;
+  border: 1px solid var(--f-border-l1);
+  border-radius: var(--f-radius);
+  outline: none;
+  color: var(--f-text-primary);
+  background: var(--f-bg-base);
+  font: 13.5px/1.75 var(--f-font-mono);
+  tab-size: 2;
+}
+.markdown-editor:focus {
+  border-color: var(--f-accent);
+  box-shadow: 0 0 0 2px var(--f-accent-soft);
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(9, 9, 11, 0.42);
+}
+.dialog-card {
+  width: min(460px, 100%);
+  padding: 20px;
+  border: 1px solid var(--f-border-l2);
+  border-radius: 12px;
+  background: var(--f-bg-base);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.2);
+}
+.dialog-card h2 {
+  margin: 0 0 10px;
+  color: var(--f-text-primary);
+  font-size: 16px;
+}
+.dialog-card p {
+  margin: 0;
+  color: var(--f-text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.dialog-card .dialog-error {
+  margin-top: 10px;
+  color: var(--f-danger);
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+/* ---------- fnOS multi-workspace sidebar ---------- */
+.fnos-reader .app-sidebar { width: 292px; padding: 0; }
+.fnos-reader .workspace-browser { display: flex; flex-direction: column; min-height: 100%; }
+.fnos-reader .sidebar-section { border-bottom: 1px solid var(--f-border-l1); }
+.fnos-reader .workspace-search { padding: 10px; }
+.fnos-reader .workspace-search-field { display: block; }
+.fnos-reader .workspace-search-field input {
+  width: 100%;
+  height: 30px;
+  padding: 4px 9px;
+  border: 1px solid var(--f-border-l1);
+  border-radius: 7px;
+  outline: none;
+  color: var(--f-text-primary);
+  background: var(--f-bg-base);
+  font: inherit;
+  font-size: 12.5px;
+}
+.fnos-reader .workspace-search-field input:focus {
+  border-color: var(--f-accent);
+  box-shadow: 0 0 0 2px var(--f-accent-soft);
+}
+.fnos-reader .workspace-search-field input:disabled { opacity: 0.55; }
+.fnos-reader .search-results {
+  max-height: min(340px, 42vh);
+  margin: 8px -10px -10px;
+  overflow-y: auto;
+  border-top: 1px solid var(--f-border-l1);
+}
+.fnos-reader .sidebar-section-header,
+.fnos-reader .workspace-section-header {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 4px 8px 4px 12px;
+  gap: 4px;
+}
+.fnos-reader .sidebar-section-header h2,
+.fnos-reader .workspace-section-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--f-text-tertiary);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.fnos-reader .workspace-section-title {
+  color: var(--f-text-secondary);
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.fnos-reader button.sidebar-text-action,
+.fnos-reader button.sidebar-icon-action {
+  flex-shrink: 0;
+  border: 0;
+  color: var(--f-text-tertiary);
+}
+.fnos-reader button.sidebar-text-action { padding: 2px 5px; font-size: 11px; }
+.fnos-reader button.sidebar-icon-action {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  font-size: 15px;
+}
+.fnos-reader .sidebar-document-list { padding-bottom: 5px; }
+.fnos-reader .sidebar-document-row { position: relative; display: flex; min-width: 0; }
+.fnos-reader button.sidebar-document {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px 34px 6px 12px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+}
+.fnos-reader .sidebar-document-row > .sidebar-icon-action {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+}
+.fnos-reader .sidebar-document-title,
+.fnos-reader .sidebar-document-path,
+.fnos-reader .search-result-meta,
+.fnos-reader .search-result-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fnos-reader .sidebar-document-title { color: var(--f-text-secondary); font-size: 12.5px; }
+.fnos-reader .sidebar-document-path,
+.fnos-reader .search-result-meta { color: var(--f-text-tertiary); font-size: 10.5px; }
+.fnos-reader button.search-result { width: 100%; padding: 7px 12px; }
+.fnos-reader .search-result-snippet {
+  color: var(--f-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.fnos-reader .sidebar-hint {
+  padding: 9px 12px;
+  color: var(--f-text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.fnos-reader .sidebar-error { color: var(--f-danger); }
+.fnos-reader .workspace-section { padding-bottom: 5px; }
+.fnos-reader .workspace-section + .workspace-section { border-top: 0; }
+.fnos-reader .workspace-section-header { background: var(--f-bg-overlay-l1); }
+.fnos-reader .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 720px) {
+  .fnos-reader .app-sidebar { width: min(292px, calc(100vw - 36px)); }
+}

@@ -1,20 +1,101 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct ReaderView: View {
   @ObservedObject var viewModel: ReaderViewModel
+  @Binding var appearance: AppAppearance
 
   var body: some View {
     NavigationSplitView {
       sidebar
     } detail: {
       detail
-        .navigationTitle(viewModel.currentDocument?.displayName ?? "Flux Reader")
+        .navigationTitle(navigationTitle)
     }
     .navigationSplitViewStyle(.balanced)
     .frame(minWidth: 860, minHeight: 580)
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
+        if viewModel.currentDocument != nil {
+          if viewModel.isViewingRetainedRecoveryVersion {
+            Label("恢复版本（只读）", systemImage: "lock.fill")
+              .help("恢复版本只能查看；如需继续处理，请使用“另存为”创建新文稿")
+          } else {
+            Button {
+              viewModel.toggleEditing()
+            } label: {
+              Label(
+                viewModel.isEditing ? "预览" : "编辑",
+                systemImage: viewModel.isEditing ? "eye" : "pencil"
+              )
+            }
+            .help(viewModel.isEditing ? "预览当前草稿" : "编辑当前文稿")
+            .accessibilityIdentifier("flux.edit")
+          }
+
+          if viewModel.hasUnsavedChanges {
+            Text("未保存")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .accessibilityIdentifier("flux.dirty-indicator")
+          }
+
+          Button {
+            viewModel.save()
+          } label: {
+            if viewModel.isSaving {
+              ProgressView()
+                .controlSize(.small)
+            } else {
+              Label("保存", systemImage: "square.and.arrow.down")
+            }
+          }
+          .help("保存当前文稿")
+          .disabled(!viewModel.canSave)
+          .accessibilityIdentifier("flux.save")
+
+          Menu {
+            Button("另存为…") {
+              viewModel.requestSaveAs()
+            }
+            .disabled(!viewModel.canSaveAs)
+
+            Button("还原到已保存版本", role: .destructive) {
+              viewModel.revertDraft()
+            }
+            .disabled(!viewModel.hasUnsavedChanges || viewModel.isSaving)
+
+            Button("从磁盘重新载入…") {
+              viewModel.reloadFromDisk()
+            }
+            .disabled(viewModel.isSaving)
+          } label: {
+            Label("文稿操作", systemImage: "ellipsis.circle")
+          }
+          .help("另存为或还原文稿")
+          .accessibilityIdentifier("flux.document-actions")
+        }
+
+        Menu {
+          ForEach(AppAppearance.allCases) { option in
+            Button {
+              appearance = option
+            } label: {
+              Label(
+                option.title,
+                systemImage: appearance == option ? "checkmark" : option.systemImage
+              )
+            }
+          }
+        } label: {
+          Label("切换外观", systemImage: appearance.systemImage)
+            .labelStyle(.iconOnly)
+        }
+        .help("切换跟随系统、浅色或深色外观")
+        .accessibilityIdentifier("flux.appearance")
+        .accessibilityValue(appearance.title)
+
         if !viewModel.workspaces.isEmpty {
           Button {
             viewModel.refreshAllWorkspaces()
@@ -40,16 +121,11 @@ struct ReaderView: View {
       }
     }
     .fileImporter(
-      isPresented: $viewModel.isFileImporterPresented,
-      allowedContentTypes: MarkdownContentType.allowedContentTypes,
-      allowsMultipleSelection: false,
-      onCompletion: viewModel.handleImportResult
-    )
-    .fileImporter(
-      isPresented: $viewModel.isFolderImporterPresented,
-      allowedContentTypes: [.folder],
-      allowsMultipleSelection: true,
-      onCompletion: viewModel.handleFolderImportResult
+      isPresented: $viewModel.isImporterPresented,
+      allowedContentTypes: viewModel.importerRequest == .document
+        ? MarkdownContentType.allowedContentTypes : [.folder],
+      allowsMultipleSelection: viewModel.importerRequest == .folders,
+      onCompletion: viewModel.handleImporterResult
     )
     .onOpenURL(perform: viewModel.open)
     .dropDestination(for: URL.self) { urls, _ in
@@ -58,10 +134,97 @@ struct ReaderView: View {
     .task {
       viewModel.restoreLibraryIfNeeded()
     }
+    .onChange(of: viewModel.saveAsRequestID) { _, _ in
+      presentSavePanel()
+    }
+    .confirmationDialog(
+      "当前文稿有未保存的更改",
+      isPresented: $viewModel.isUnsavedChangesConfirmationPresented,
+      titleVisibility: .visible
+    ) {
+      Button("保存并打开") {
+        viewModel.saveAndOpenPendingDocument()
+      }
+      Button("不保存并打开", role: .destructive) {
+        viewModel.discardChangesAndOpenPendingDocument()
+      }
+      Button("取消", role: .cancel) {
+        viewModel.cancelPendingDocumentOpen()
+      }
+    } message: {
+      Text("你可以先保存当前更改，或放弃更改后继续打开其他文稿。")
+    }
+    .confirmationDialog(
+      "永久删除保存恢复版本？",
+      isPresented: recoveryVersionDeletionBinding,
+      titleVisibility: .visible
+    ) {
+      Button("删除恢复版本", role: .destructive) {
+        viewModel.confirmDeleteRetainedRecoveryVersion()
+      }
+      .accessibilityIdentifier("flux.confirm-delete-recovery-version")
+      Button("取消", role: .cancel) {
+        viewModel.cancelDeleteRetainedRecoveryVersion()
+      }
+    } message: {
+      Text(
+        "恢复版本用于保留其他应用通过旧文件句柄晚到写入的内容。应用至少保留 24 小时；确认删除后无法恢复。"
+      )
+    }
+    .alert("无法完成文稿操作", isPresented: saveErrorBinding) {
+      Button("好") {
+        viewModel.dismissSaveError()
+      }
+    } message: {
+      Text(viewModel.saveErrorMessage ?? "未知错误")
+    }
+    .alert("已恢复未保存的草稿", isPresented: draftRecoveryMessageBinding) {
+      Button("继续编辑") {
+        viewModel.dismissDraftRecoveryMessage()
+      }
+    } message: {
+      Text(viewModel.draftRecoveryMessage ?? "已恢复草稿，磁盘文件尚未被覆盖。")
+    }
     .searchable(
       text: $viewModel.searchQuery,
       placement: .sidebar,
       prompt: "搜索文件名和正文"
+    )
+  }
+
+  private var navigationTitle: String {
+    guard let document = viewModel.currentDocument else { return "Flux Reader" }
+    if viewModel.isViewingRetainedRecoveryVersion {
+      return "\(document.displayName) — 恢复版本（只读）"
+    }
+    return viewModel.hasUnsavedChanges
+      ? "\(document.displayName) — 已修改" : document.displayName
+  }
+
+  private var saveErrorBinding: Binding<Bool> {
+    Binding(
+      get: { viewModel.saveErrorMessage != nil },
+      set: { isPresented in
+        if !isPresented { viewModel.dismissSaveError() }
+      }
+    )
+  }
+
+  private var draftRecoveryMessageBinding: Binding<Bool> {
+    Binding(
+      get: { viewModel.draftRecoveryMessage != nil },
+      set: { isPresented in
+        if !isPresented { viewModel.dismissDraftRecoveryMessage() }
+      }
+    )
+  }
+
+  private var recoveryVersionDeletionBinding: Binding<Bool> {
+    Binding(
+      get: { viewModel.recoveryVersionPendingDeletion != nil },
+      set: { isPresented in
+        if !isPresented { viewModel.cancelDeleteRetainedRecoveryVersion() }
+      }
     )
   }
 
@@ -84,6 +247,10 @@ struct ReaderView: View {
       }
 
       workspaceSection
+
+      if !viewModel.retainedRecoveryVersions.isEmpty {
+        retainedRecoveryVersionsSection
+      }
 
       if !viewModel.recentDocuments.isEmpty {
         Section("最近文稿") {
@@ -114,6 +281,54 @@ struct ReaderView: View {
     .accessibilityIdentifier("flux.sidebar")
     .navigationTitle("Flux Reader")
     .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 380)
+  }
+
+  @ViewBuilder
+  private var retainedRecoveryVersionsSection: some View {
+    Section("保存恢复版本") {
+      ForEach(viewModel.retainedRecoveryVersions) { version in
+        HStack(spacing: 8) {
+          Button {
+            viewModel.openRetainedRecoveryVersion(version)
+          } label: {
+            VStack(alignment: .leading, spacing: 2) {
+              Label(version.displayName, systemImage: "clock.arrow.circlepath")
+                .lineLimit(1)
+              Text(version.createdAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+              if version.state == .pending {
+                Text("未完成保存事务，内容已保留")
+                  .font(.caption2)
+                  .foregroundStyle(.orange)
+                  .accessibilityIdentifier("flux.recovery-state-pending")
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .buttonStyle(.plain)
+          .help("打开保留版本，不覆盖当前磁盘文件")
+          .accessibilityIdentifier("flux.recovery-version-\(version.id.uuidString)")
+
+          Button {
+            viewModel.requestDeleteRetainedRecoveryVersion(version)
+          } label: {
+            Image(systemName: "trash")
+          }
+          .buttonStyle(.borderless)
+          .help("明确删除恢复版本")
+          .accessibilityIdentifier(
+            "flux.delete-recovery-version-\(version.id.uuidString)"
+          )
+        }
+      }
+
+      Text(
+        "应用不会自动删除恢复版本。每份文稿最多 5 个、全部文稿最多 50 个、总量最多 100 MiB；达到上限时保存会在写入前暂停。版本保留满 24 小时后，可点击垃圾桶并明确确认删除，再重试保存。"
+      )
+      .font(.caption2)
+      .foregroundStyle(.secondary)
+    }
   }
 
   @ViewBuilder
@@ -292,7 +507,35 @@ struct ReaderView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     case .loaded(let document):
-      MarkdownRendererView(document: document)
+      VStack(spacing: 0) {
+        if viewModel.isViewingRetainedRecoveryVersion {
+          HStack(spacing: 8) {
+            Label("保存恢复版本（只读）", systemImage: "lock.fill")
+              .font(.callout.weight(.semibold))
+              .accessibilityIdentifier("flux.recovery-read-only")
+            Text("如需继续处理，请使用“另存为”创建新文稿。")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+          }
+          .padding(.horizontal, 16)
+          .padding(.vertical, 10)
+          .background(.bar)
+          Divider()
+        }
+
+        if viewModel.isEditing {
+          MarkdownEditorView(
+            content: $viewModel.draftContent,
+            document: document,
+            hasUnsavedChanges: viewModel.hasUnsavedChanges,
+            isSaving: viewModel.isSaving,
+            statusMessage: viewModel.saveStatusMessage
+          )
+        } else if let previewDocument = viewModel.previewDocument {
+          MarkdownRendererView(document: previewDocument)
+        }
+      }
     case .failure(let message):
       VStack(spacing: 16) {
         Image(systemName: "exclamationmark.triangle")
@@ -341,5 +584,84 @@ struct ReaderView: View {
     }
     .padding(32)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private func presentSavePanel() {
+    guard let presentation = viewModel.saveAsPresentation else { return }
+
+    let panel = NSSavePanel()
+    panel.title = "另存 Markdown 文稿"
+    panel.prompt = "保存"
+    panel.nameFieldStringValue = presentation.suggestedFileName
+    panel.directoryURL = presentation.suggestedDirectoryURL
+    panel.allowedContentTypes = MarkdownContentType.allowedContentTypes
+    panel.allowsOtherFileTypes = false
+    panel.canCreateDirectories = true
+    panel.isExtensionHidden = false
+    panel.begin { response in
+      guard response == .OK, let url = panel.url else { return }
+      viewModel.saveAs(to: url, for: presentation.sourceDocumentURL)
+    }
+  }
+}
+
+private struct MarkdownEditorView: View {
+  @Binding var content: String
+
+  let document: MarkdownDocument
+  let hasUnsavedChanges: Bool
+  let isSaving: Bool
+  let statusMessage: String?
+
+  @FocusState private var editorIsFocused: Bool
+
+  var body: some View {
+    VStack(spacing: 0) {
+      TextEditor(text: $content)
+        .font(.system(.body, design: .monospaced))
+        .lineSpacing(3)
+        .padding(12)
+        .textEditorStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Color(nsColor: .textBackgroundColor))
+        .focused($editorIsFocused)
+        .accessibilityLabel("Markdown 编辑器")
+        .accessibilityIdentifier("flux.editor")
+
+      Divider()
+
+      HStack(spacing: 12) {
+        Text(document.url.path(percentEncoded: false))
+          .lineLimit(1)
+          .truncationMode(.middle)
+
+        Spacer()
+
+        if isSaving {
+          Label("正在保存…", systemImage: "arrow.triangle.2.circlepath")
+        } else if hasUnsavedChanges {
+          Label("未保存", systemImage: "circle.fill")
+            .accessibilityIdentifier("flux.editor-dirty-status")
+        } else if let statusMessage {
+          Label(statusMessage, systemImage: "checkmark.circle")
+            .accessibilityIdentifier("flux.save-status")
+        }
+
+        Text(
+          ByteCountFormatter.string(
+            fromByteCount: Int64(content.utf8.count),
+            countStyle: .file
+          )
+        )
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 7)
+      .background(.bar)
+    }
+    .onAppear {
+      editorIsFocused = true
+    }
   }
 }
