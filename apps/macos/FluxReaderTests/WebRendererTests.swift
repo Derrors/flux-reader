@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WebKit
 import XCTest
@@ -178,6 +179,18 @@ final class WebRendererTests: XCTestCase {
     )
     let webView = WKWebView(
       frame: CGRect(x: 0, y: 0, width: 1_024, height: 768), configuration: configuration)
+    let window = NSWindow(
+      contentRect: webView.frame,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = webView
+    window.orderFront(nil)
+    defer {
+      window.orderOut(nil)
+      window.contentView = nil
+    }
 
     for contractCase in manifest.cases {
       var components = URLComponents(
@@ -356,7 +369,9 @@ final class WebRendererTests: XCTestCase {
           snapshot.state == "passed" || snapshot.state == "failed"
         {
           if snapshot.state == "failed" {
-            XCTFail("\(entry)/\(file): \(result.failures.joined(separator: "; "))")
+            throw RenderContractTestError.failed(
+              "\(entry)/\(file): \(result.failures.joined(separator: "; "))"
+            )
           }
           return result
         }
@@ -368,8 +383,9 @@ final class WebRendererTests: XCTestCase {
       try await Task.sleep(for: .milliseconds(50))
     }
 
-    XCTFail("Timed out waiting for \(entry)/\(file). Last state: \(lastSnapshot ?? "<none>")")
-    throw RenderContractTestError.timedOut
+    throw RenderContractTestError.timedOut(
+      "Timed out waiting for \(entry)/\(file). Last state: \(lastSnapshot ?? "<none>")"
+    )
   }
 
   @MainActor
@@ -410,6 +426,14 @@ private struct RenderContractResult: Decodable {
   let failures: [String]
 }
 
-private enum RenderContractTestError: Error {
-  case timedOut
+private enum RenderContractTestError: LocalizedError {
+  case failed(String)
+  case timedOut(String)
+
+  var errorDescription: String? {
+    switch self {
+    case .failed(let message), .timedOut(let message):
+      message
+    }
+  }
 }

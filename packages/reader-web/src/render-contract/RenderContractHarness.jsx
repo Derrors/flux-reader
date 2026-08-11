@@ -32,9 +32,20 @@ export default function RenderContractHarness({ entry }) {
 
     let settled = false;
     let frame = 0;
+    let fallbackTimer = 0;
+    let timeout = 0;
+    const cancelScheduledInspection = () => {
+      if (frame) globalThis.cancelAnimationFrame(frame);
+      if (fallbackTimer) globalThis.clearTimeout(fallbackTimer);
+      frame = 0;
+      fallbackTimer = 0;
+    };
     const finish = (failures) => {
       if (settled) return;
       settled = true;
+      cancelScheduledInspection();
+      if (timeout) globalThis.clearTimeout(timeout);
+      timeout = 0;
       const result = {
         version: renderContractManifest.version,
         entry,
@@ -50,16 +61,23 @@ export default function RenderContractHarness({ entry }) {
       return undefined;
     }
 
+    const settle = () => {
+      if (settled || hasPendingAsyncRenderer(root)) return;
+      finish(assertRenderContract(root, contractCase, { terminal: true }));
+    };
     const inspect = () => {
       if (settled || hasPendingAsyncRenderer(root)) return;
-      // React commits state before effects; one animation frame makes the
-      // contract signal correspond to a paintable DOM without waiting for
-      // unrelated images, fonts, or timers.
+      cancelScheduledInspection();
+      // Prefer a painted frame, but keep a timer fallback because an offscreen
+      // WKWebView can suspend requestAnimationFrame indefinitely in XCTest.
       frame = globalThis.requestAnimationFrame(() => {
         frame = 0;
-        if (hasPendingAsyncRenderer(root)) return;
-        finish(assertRenderContract(root, contractCase, { terminal: true }));
+        settle();
       });
+      fallbackTimer = globalThis.setTimeout(() => {
+        fallbackTimer = 0;
+        settle();
+      }, 100);
     };
 
     const observer = new MutationObserver(inspect);
@@ -70,7 +88,7 @@ export default function RenderContractHarness({ entry }) {
       attributeFilter: ['class', 'data-render-state'],
     });
     inspect();
-    const timeout = globalThis.setTimeout(() => {
+    timeout = globalThis.setTimeout(() => {
       finish([
         'renderer did not reach a terminal state',
         ...assertRenderContract(root, contractCase, { terminal: false }),
@@ -80,7 +98,7 @@ export default function RenderContractHarness({ entry }) {
     return () => {
       observer.disconnect();
       globalThis.clearTimeout(timeout);
-      if (frame) globalThis.cancelAnimationFrame(frame);
+      cancelScheduledInspection();
     };
   }, [contractCase, entry]);
 

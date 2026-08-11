@@ -298,7 +298,19 @@ try {
   server.closeIdleConnections?.();
   server.closeAllConnections?.();
   await new Promise((resolve) => server.close(resolve));
-  await rm(profileDirectory, { recursive: true, force: true });
+  try {
+    await rm(profileDirectory, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 150,
+    });
+  } catch (error) {
+    // Chrome helpers can briefly keep profile files busy after the browser
+    // process exits. A best-effort cleanup must not turn passed contracts into
+    // a failed CI run; hosted runners discard their temporary directory.
+    console.warn(`Unable to remove Chromium profile ${profileDirectory}: ${error.message}`);
+  }
 }
 
 process.exitCode = exitCode;
