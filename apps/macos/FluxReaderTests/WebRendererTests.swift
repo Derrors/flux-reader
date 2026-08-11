@@ -39,6 +39,42 @@ final class AppAppearanceTests: XCTestCase {
   }
 }
 
+@MainActor
+private final class SplitScrollEndpointSpy: SplitScrollEndpoint {
+  private(set) var receivedFractions: [Double] = []
+
+  func applySynchronizedScrollFraction(_ fraction: Double) {
+    receivedFractions.append(fraction)
+  }
+}
+
+final class SplitScrollSynchronizerTests: XCTestCase {
+  @MainActor
+  func testRoutesOnlyToOppositePaneAndClampsFractions() {
+    let synchronizer = SplitScrollSynchronizer()
+    let editor = SplitScrollEndpointSpy()
+    let preview = SplitScrollEndpointSpy()
+    synchronizer.attach(editor, to: .editor)
+    synchronizer.attach(preview, to: .preview)
+
+    synchronizer.userDidScroll(.editor, fraction: 0.25)
+    XCTAssertEqual(editor.receivedFractions, [])
+    XCTAssertEqual(preview.receivedFractions, [0.25])
+
+    synchronizer.userDidScroll(.preview, fraction: 2)
+    XCTAssertEqual(editor.receivedFractions, [1])
+    XCTAssertEqual(preview.receivedFractions, [0.25])
+
+    synchronizer.resetPositions()
+    XCTAssertEqual(editor.receivedFractions, [1, 0])
+    XCTAssertEqual(preview.receivedFractions, [0.25, 0])
+
+    synchronizer.detach(preview, from: .preview)
+    synchronizer.userDidScroll(.editor, fraction: 0.75)
+    XCTAssertEqual(preview.receivedFractions, [0.25, 0])
+  }
+}
+
 final class WebRendererTests: XCTestCase {
   @MainActor
   func testBundledRendererEntryAndConfiguration() throws {

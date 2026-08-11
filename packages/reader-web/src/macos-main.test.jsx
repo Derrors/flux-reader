@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MacOSDocumentView } from './macos-main';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MacOSDocumentView, MacOSRenderer } from './macos-main';
 
 vi.mock('./markdown/MarkdownView', () => ({
   default: ({ content, findQuery, findCaseSensitive, activeFindMatch }) => (
@@ -29,6 +29,10 @@ function renderState(content) {
 describe('macOS 文档目录', () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView.mockClear();
+  });
+
+  afterEach(() => {
+    delete globalThis.webkit;
   });
 
   it('仅在文档包含两个以上标题时展示目录', () => {
@@ -99,5 +103,33 @@ describe('macOS 文档目录', () => {
     Object.defineProperty(scrollElement, 'scrollHeight', { value: 1_000 });
     expect(globalThis.fluxReader.setScrollFraction(0.25)).toBe(true);
     expect(scrollElement.scrollTop).toBe(200);
+  });
+
+  it('程序同步滚动不回传，用户滚动才通知原生端', async () => {
+    const scrollPosition = vi.fn();
+    globalThis.webkit = {
+      messageHandlers: {
+        rendererReady: { postMessage: vi.fn() },
+        scrollPosition: { postMessage: scrollPosition },
+      },
+    };
+    render(<MacOSRenderer />);
+
+    const scrollElement = document.querySelector('.macos-renderer-scroll');
+    Object.defineProperties(scrollElement, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1_000 },
+    });
+
+    expect(globalThis.fluxReader.setScrollFraction(0.25)).toBe(true);
+    fireEvent.scroll(scrollElement);
+    await new Promise((resolve) => globalThis.requestAnimationFrame(resolve));
+    expect(scrollPosition).not.toHaveBeenCalled();
+
+    scrollElement.scrollTop = 400;
+    fireEvent.scroll(scrollElement);
+    await waitFor(() => {
+      expect(scrollPosition).toHaveBeenCalledWith({ kind: 'user', fraction: 0.5 });
+    });
   });
 });
