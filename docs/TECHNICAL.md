@@ -193,6 +193,7 @@ Developer ID 签名、公证需要的变量与 GitHub secrets 见
 ```bash
 # 修改 VERSION 后
 npm run version:sync
+# 编写 docs/releases/<version>.md 中文更新摘要
 npm run test:all
 ```
 
@@ -202,7 +203,12 @@ npm run test:all
 2. 并行构建 `flux-reader-<version>.fpk` 和
    `Flux-Reader-<version>-unnotarized-universal.dmg`。
 3. 生成 `SHA256SUMS`。
-4. 创建 `v<version>` GitHub Release。
+4. 读取 `docs/releases/<version>.md`，生成中文更新说明。
+5. 创建 `v<version>` GitHub Release。
+
+版本摘要必须存在、非空并包含中文；`npm run version:check` 和 Release 工作流都会校验。
+发布正文不会调用 GitHub 的英文自动说明，而是保留维护者编写的中文概括，并统一追加下载
+文件说明与未公证 macOS 构建警告。
 
 工作流不会移动或覆盖已经发布的 tag。仓库 Actions 必须允许 `GITHUB_TOKEN` 使用
 `contents: write` 才能创建 tag 和 Release。
