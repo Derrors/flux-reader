@@ -249,7 +249,6 @@ jobs:
       FPK_ASSET: ${{ needs.metadata.outputs.fpk_asset }}
       DMG_ASSET: ${{ needs.metadata.outputs.dmg_asset }}
       RELEASE_MARKER: "<!-- flux-reader-release-workflow -->"
-      RELEASE_NOTES_FILE: ${{ runner.temp }}/flux-reader-release-notes.md
 
     steps:
       - name: Checkout repository
@@ -261,6 +260,8 @@ jobs:
           persist-credentials: true
 
       - name: Prepare Chinese release notes
+        env:
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/flux-reader-release-notes.md
         run: node scripts/prepare-release-notes.js --output "$RELEASE_NOTES_FILE"
 
       - name: Download release artifacts
@@ -280,6 +281,8 @@ jobs:
           sha256sum --check --strict SHA256SUMS
 
       - name: Publish immutable version
+        env:
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/flux-reader-release-notes.md
         run: |
           set -euo pipefail
 
