@@ -42,7 +42,14 @@ vi.mock('./markdown/MarkdownView', () => ({
     </article>
   ),
 }));
-vi.mock('./markdown/pipeline', () => ({ extractToc: vi.fn(() => []) }));
+vi.mock('./markdown/pipeline', () => ({
+  createMarkdownSnapshot: vi.fn((source) => ({
+    source,
+    tokens: [],
+    safeHtml: '',
+    toc: [],
+  })),
+}));
 
 function deferred() {
   let resolve;
@@ -2360,7 +2367,7 @@ describe('App fnOS 编辑、保存与恢复', () => {
     expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
   });
 
-  it('编辑与预览分栏共享同一份实时草稿', async () => {
+  it('编辑与预览分栏合并连续输入并展示最终草稿', async () => {
     const user = await renderReady();
     await openEditableFile(user, { content: '# 初始' });
 
@@ -2370,7 +2377,9 @@ describe('App fnOS 编辑、保存与恢复', () => {
     const editor = screen.getByRole('textbox', { name: 'Markdown 编辑器' });
     await user.clear(editor);
     await user.type(editor, '# 实时预览');
-    expect(screen.getByTestId('markdown-view')).toHaveTextContent('# 实时预览');
+    await waitFor(() => {
+      expect(screen.getByTestId('markdown-view')).toHaveTextContent('# 实时预览');
+    });
 
     const previewPane = screen.getByRole('region', { name: '预览面板' });
     Object.defineProperties(editor, {

@@ -19,6 +19,7 @@ vi.mock('./markdown/MarkdownView', () => ({
 
 function renderState(content) {
   return {
+    generation: 'generation-1',
     content,
     title: 'Test.md',
     theme: 'light',
@@ -107,9 +108,11 @@ describe('macOS 文档目录', () => {
 
   it('程序同步滚动不回传，用户滚动才通知原生端', async () => {
     const scrollPosition = vi.fn();
+    const contentDidPaint = vi.fn();
     globalThis.webkit = {
       messageHandlers: {
         rendererReady: { postMessage: vi.fn() },
+        contentDidPaint: { postMessage: contentDidPaint },
         scrollPosition: { postMessage: scrollPosition },
       },
     };
@@ -130,6 +133,44 @@ describe('macOS 文档目录', () => {
     fireEvent.scroll(scrollElement);
     await waitFor(() => {
       expect(scrollPosition).toHaveBeenCalledWith({ kind: 'user', fraction: 0.5 });
+    });
+    expect(contentDidPaint).not.toHaveBeenCalled();
+  });
+
+  it('只在真实文档 commit 后回传带 generation 的首次绘制消息', async () => {
+    const contentDidPaint = vi.fn();
+    globalThis.webkit = {
+      messageHandlers: {
+        contentDidPaint: { postMessage: contentDidPaint },
+      },
+    };
+
+    const { rerender } = render(
+      <MacOSDocumentView renderState={renderState('# First')} />,
+    );
+    await waitFor(() => {
+      expect(contentDidPaint).toHaveBeenLastCalledWith({
+        generation: 'generation-1',
+        theme: 'light',
+        hasContent: true,
+      });
+    });
+
+    rerender(
+      <MacOSDocumentView
+        renderState={{
+          ...renderState('# Second'),
+          generation: 'generation-2',
+          theme: 'dark',
+        }}
+      />,
+    );
+    await waitFor(() => {
+      expect(contentDidPaint).toHaveBeenLastCalledWith({
+        generation: 'generation-2',
+        theme: 'dark',
+        hasContent: true,
+      });
     });
   });
 });

@@ -13,6 +13,30 @@
   word-wrap: break-word;
 }
 
+/* 渐进增强：跳过远离视口 block 的 layout/paint。JS feature detection 与
+   构建开关共同控制，旧 WebKit 或紧急回滚时不会命中这组规则。 */
+@supports (content-visibility: auto) {
+  html[data-content-visibility='enabled'] .markdown-root > :where(
+    h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, hr,
+    .code-block, .table-container, .image-group, .math-display, .mermaid-block
+  ) {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 96px;
+  }
+
+  html[data-content-visibility='enabled'] .markdown-root > :where(
+    .code-block, .table-container, .image-group, .math-display, .mermaid-block
+  ) {
+    contain-intrinsic-block-size: auto 240px;
+  }
+}
+
+@media print {
+  .markdown-root > * {
+    content-visibility: visible !important;
+  }
+}
+
 /* ---------- 标题 ---------- */
 .flow-markdown-body h1,
 .flow-markdown-body h2,

@@ -5,12 +5,26 @@
  *   preprocess(源码) → marked → 净化 HTML → html-react-parser → React
  *   其中代码块被替换为占位 div，在此处换成 <CodeBlock/> 组件。
  */
-import { Fragment, useEffect, useMemo } from 'react';
+import {
+  createContext,
+  Fragment,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from 'react';
 import parse, { attributesToProps, domToReact, Element } from 'html-react-parser';
-import { preprocess } from './preprocess';
-import { renderToSafeHtml } from './pipeline';
+import { createMarkdownSnapshot } from './pipeline';
 import CodeBlock from './CodeBlock';
+import { cancelHighlightSession, createHighlightSession } from './highlight';
 import 'katex/dist/katex.min.css';
+
+const MarkdownRuntimeContext = createContext({
+  theme: 'light',
+  highlightSessionId: '',
+  resolveImageSource: undefined,
+});
 
 /**
  * 图片编组：段落内连续多张图片排成网格，而非竖排堆叠。
@@ -34,6 +48,25 @@ function resolvedImageSource(source, resolveImageSource) {
   return resolveImageSource?.(src) || null;
 }
 
+function RuntimeImage({ source, ...props }) {
+  const { resolveImageSource } = useContext(MarkdownRuntimeContext);
+  const src = resolvedImageSource(source, resolveImageSource);
+  if (!src) return null;
+  return <img {...props} src={src} />;
+}
+
+function RuntimeCodeBlock({ code, language }) {
+  const { theme, highlightSessionId } = useContext(MarkdownRuntimeContext);
+  return (
+    <CodeBlock
+      code={code}
+      language={language}
+      theme={theme}
+      highlightSessionId={highlightSessionId}
+    />
+  );
+}
+
 export default function MarkdownView({
   content,
   theme = 'light',
@@ -43,11 +76,33 @@ export default function MarkdownView({
   findCaseSensitive = false,
   activeFindMatch = 0,
   onFindMatchCountChange,
+  snapshot,
 }) {
-  const html = useMemo(() => {
-    if (!content) return '';
-    return renderToSafeHtml(preprocess(content));
-  }, [content]);
+  const rootRef = useRef(null);
+  const highlightSessionId = useMemo(
+    () => createHighlightSession(),
+    [content, theme],
+  );
+
+  useEffect(
+    () => () => cancelHighlightSession(highlightSessionId),
+    [highlightSessionId],
+  );
+
+  const ownedSnapshot = useMemo(
+    () => (
+      snapshot?.source === String(content || '')
+        ? snapshot
+        : createMarkdownSnapshot(content)
+    ),
+    [content, snapshot],
+  );
+  const html = ownedSnapshot.safeHtml;
+
+  const runtime = useMemo(
+    () => ({ theme, highlightSessionId, resolveImageSource }),
+    [highlightSessionId, resolveImageSource, theme],
+  );
 
   const renderResult = useMemo(() => {
     if (!html) return { content: null, matchCount: 0 };
@@ -69,9 +124,7 @@ export default function MarkdownView({
         pieces.push(
           <mark
             key={`find-${currentIndex}-${index}`}
-            className={`markdown-find-match${
-              currentIndex === activeFindMatch ? ' is-active' : ''
-            }`}
+            className="markdown-find-match"
             data-find-match={currentIndex}
           >
             {value.slice(index, index + findQuery.length)}
@@ -92,12 +145,11 @@ export default function MarkdownView({
         if (!(node instanceof Element)) return undefined;
 
         if (node.name === 'img') {
-          const src = resolvedImageSource(node.attribs?.src, resolveImageSource);
-          if (!src) return <></>;
-
           const props = attributesToProps(node.attribs || {});
+          const source = props.src;
+          delete props.src;
           delete props.srcSet;
-          return <img {...props} src={src} />;
+          return <RuntimeImage {...props} source={source} />;
         }
 
         // 代码块占位 → CodeBlock 组件
@@ -110,10 +162,9 @@ export default function MarkdownView({
             code = raw;
           }
           return (
-            <CodeBlock
+            <RuntimeCodeBlock
               code={code}
               language={node.attribs['data-lang'] || ''}
-              theme={theme}
             />
           );
         }
@@ -143,21 +194,38 @@ export default function MarkdownView({
 
     const parsed = parse(html, options);
     return { content: parsed, matchCount: matchIndex };
-  }, [activeFindMatch, findCaseSensitive, findQuery, html, resolveImageSource, theme]);
+  }, [
+    findCaseSensitive,
+    findQuery,
+    html,
+  ]);
 
   useEffect(() => {
     onFindMatchCountChange?.(renderResult.matchCount);
   }, [onFindMatchCountChange, renderResult.matchCount]);
 
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    root.querySelector('.markdown-find-match.is-active')?.classList.remove('is-active');
+    root
+      .querySelector(`[data-find-match="${activeFindMatch}"]`)
+      ?.classList.add('is-active');
+  }, [activeFindMatch, renderResult.content]);
+
   useEffect(() => {
     if (!findQuery || renderResult.matchCount === 0) return;
     const selector = `[data-find-match="${activeFindMatch}"]`;
-    document.querySelector(selector)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    rootRef.current
+      ?.querySelector(selector)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, [activeFindMatch, findQuery, renderResult.matchCount]);
 
   return (
-    <div className={`flow-markdown-body ${className}`.trim()}>
-      <div className="markdown-root">{renderResult.content}</div>
-    </div>
+    <MarkdownRuntimeContext.Provider value={runtime}>
+      <div ref={rootRef} className={`flow-markdown-body ${className}`.trim()}>
+        <div className="markdown-root">{renderResult.content}</div>
+      </div>
+    </MarkdownRuntimeContext.Provider>
   );
 }

@@ -1,13 +1,18 @@
 /**
- * shiki Worker：在后台线程做语法高亮。
- * highlighter 单例，按需加载语言，避免重复初始化 WASM。
+ * Shiki Worker：串行调度高亮任务，允许按文稿 session 丢弃过期队列。
+ * 已经进入 codeToHtml 的同步任务无法安全抢占，但其结果会在取消后丢弃。
  */
-import { createHighlighter, bundledLanguages } from 'shiki';
+import { bundledLanguages, createHighlighter } from 'shiki';
 
 const THEMES = { light: 'github-light', dark: 'github-dark' };
 
 let highlighterPromise = null;
-const loadedLangs = new Set();
+const loadedLanguages = new Set();
+const queue = [];
+const cancelledSessions = new Set();
+const cancelledRequests = new Set();
+let activeJob = null;
+let enqueueSequence = 0;
 
 function getHighlighter() {
   if (!highlighterPromise) {
@@ -19,11 +24,10 @@ function getHighlighter() {
   return highlighterPromise;
 }
 
-/** 语言别名归一 + 是否受支持 */
-function normalizeLang(lang) {
-  const l = String(lang || '').toLowerCase().trim();
-  if (!l) return null;
-  const alias = {
+function normalizeLanguage(language) {
+  const value = String(language || '').toLowerCase().trim();
+  if (!value) return null;
+  const aliases = {
     js: 'javascript',
     ts: 'typescript',
     jsx: 'jsx',
@@ -41,30 +45,117 @@ function normalizeLang(lang) {
     plaintext: null,
     plain: null,
   };
-  const mapped = l in alias ? alias[l] : l;
-  if (!mapped) return null;
-  return mapped in bundledLanguages ? mapped : null;
+  const normalized = value in aliases ? aliases[value] : value;
+  if (!normalized) return null;
+  return normalized in bundledLanguages ? normalized : null;
 }
 
-self.onmessage = async (e) => {
-  const { id, code, lang, theme } = e.data || {};
-  try {
-    const normalized = normalizeLang(lang);
-    if (!normalized) {
-      self.postMessage({ id, html: null });
-      return;
+function isCancelled(job) {
+  return cancelledSessions.has(job.sessionId) || cancelledRequests.has(job.requestId);
+}
+
+function cleanupCancellation(job) {
+  cancelledRequests.delete(job.requestId);
+  if (
+    cancelledSessions.has(job.sessionId)
+    && activeJob?.sessionId !== job.sessionId
+    && !queue.some((queued) => queued.sessionId === job.sessionId)
+  ) {
+    cancelledSessions.delete(job.sessionId);
+  }
+}
+
+function sortQueue() {
+  queue.sort((left, right) => (
+    right.priority - left.priority || left.enqueueSequence - right.enqueueSequence
+  ));
+}
+
+async function drainQueue() {
+  if (activeJob) return;
+
+  while (queue.length > 0) {
+    const job = queue.shift();
+    if (isCancelled(job)) {
+      cleanupCancellation(job);
+      continue;
     }
-    const hl = await getHighlighter();
-    if (!loadedLangs.has(normalized)) {
-      await hl.loadLanguage(normalized);
-      loadedLangs.add(normalized);
+
+    activeJob = job;
+    try {
+      const normalized = normalizeLanguage(job.language);
+      if (!normalized) {
+        if (!isCancelled(job)) {
+          self.postMessage({ requestId: job.requestId, html: null });
+        }
+        continue;
+      }
+
+      const highlighter = await getHighlighter();
+      if (isCancelled(job)) continue;
+      if (!loadedLanguages.has(normalized)) {
+        await highlighter.loadLanguage(normalized);
+        loadedLanguages.add(normalized);
+      }
+      if (isCancelled(job)) continue;
+
+      const html = highlighter.codeToHtml(job.code, {
+        lang: normalized,
+        theme: job.theme === 'dark' ? THEMES.dark : THEMES.light,
+      });
+      if (!isCancelled(job)) {
+        self.postMessage({ requestId: job.requestId, html });
+      }
+    } catch (error) {
+      if (!isCancelled(job)) {
+        self.postMessage({
+          requestId: job.requestId,
+          error: error?.message || String(error),
+        });
+      }
+    } finally {
+      activeJob = null;
+      cleanupCancellation(job);
     }
-    const html = hl.codeToHtml(code, {
-      lang: normalized,
-      theme: theme === 'dark' ? THEMES.dark : THEMES.light,
+  }
+}
+
+self.onmessage = (event) => {
+  const message = event.data || {};
+  switch (message.type) {
+  case 'highlight':
+    if (cancelledSessions.has(message.sessionId)) return;
+    queue.push({
+      requestId: message.requestId,
+      sessionId: message.sessionId,
+      priority: Number.isFinite(message.priority) ? message.priority : 0,
+      enqueueSequence: ++enqueueSequence,
+      code: message.code,
+      language: message.language,
+      theme: message.theme,
     });
-    self.postMessage({ id, html });
-  } catch (err) {
-    self.postMessage({ id, error: err?.message || String(err) });
+    sortQueue();
+    void drainQueue();
+    break;
+  case 'cancel-session':
+    cancelledSessions.add(message.sessionId);
+    for (let index = queue.length - 1; index >= 0; index -= 1) {
+      if (queue[index].sessionId === message.sessionId) queue.splice(index, 1);
+    }
+    if (activeJob?.sessionId !== message.sessionId) {
+      cancelledSessions.delete(message.sessionId);
+    }
+    break;
+  case 'cancel-request':
+    cancelledRequests.add(message.requestId);
+    for (let index = queue.length - 1; index >= 0; index -= 1) {
+      if (queue[index].requestId === message.requestId) queue.splice(index, 1);
+    }
+    if (activeJob?.requestId !== message.requestId) {
+      cancelledRequests.delete(message.requestId);
+    }
+    break;
+  default:
+    break;
   }
 };

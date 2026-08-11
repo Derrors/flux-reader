@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MarkdownView from './markdown/MarkdownView';
-import { extractToc } from './markdown/pipeline';
+import { createMarkdownSnapshot } from './markdown/pipeline';
 import { api } from './api';
 import { initSdk, pickFolder, pickMarkdownFile, setTitle } from './trim-sdk';
 import WorkspaceSidebar from './components/WorkspaceSidebar';
@@ -23,6 +23,8 @@ import {
   MAX_EDITABLE_DOCUMENT_BYTES,
   MAX_EDITABLE_DOCUMENT_MIB,
 } from './limits';
+import { isSaveConflict, requiresSaveRecovery } from './saveOutcome';
+import { useLatestPreviewContent } from './useLatestPreviewContent';
 
 const MAX_WORKSPACES = 8;
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
@@ -412,7 +414,12 @@ export default function App() {
       ? draft !== content
       : current?.contentUnavailable === true
   );
-  const searchableContent = draft ?? content ?? '';
+  const renderedContent = draft ?? content;
+  const { previewContent, flushPreviewContent } = useLatestPreviewContent(
+    renderedContent,
+    viewMode === 'split',
+  );
+  const searchableContent = renderedContent ?? '';
   const findMatches = useMemo(
     () => findTextMatches(searchableContent, findQuery, findCaseSensitive),
     [findCaseSensitive, findQuery, searchableContent],
@@ -671,6 +678,7 @@ export default function App() {
   }, []);
 
   const saveCurrent = useCallback(() => {
+    flushPreviewContent();
     if (savingRef.current) return savingRef.current;
     if (
       conflictRef.current ||
@@ -762,7 +770,7 @@ export default function App() {
           requestSeq !== documentRequestSeqRef.current ||
           currentRef.current?.path !== selected.path
         ) return false;
-        if (err.details?.recoveryRequired || err.details?.recovery?.recoveryId) {
+        if (requiresSaveRecovery(err)) {
           try {
             const diskResult = await api.file(selected.path);
             if (
@@ -853,7 +861,7 @@ export default function App() {
             }
           }
           setError(err.message);
-        } else if (err.status === 409 && err.code === 'FILE_CONFLICT') {
+        } else if (isSaveConflict(err)) {
           try {
             const diskResult = await api.file(selected.path);
             if (
@@ -892,7 +900,7 @@ export default function App() {
     })();
     savingRef.current = operation;
     return operation;
-  }, [updateConflict, updateServerRecovery]);
+  }, [flushPreviewContent, updateConflict, updateServerRecovery]);
 
   const discardCurrentDraft = useCallback(() => {
     clearStoredDraft();
@@ -2511,15 +2519,16 @@ export default function App() {
     storeRecents(() => []);
   }, [storeRecents]);
 
-  const renderedContent = draft ?? content;
-  const toc = useMemo(
+  const rendersPreview = viewMode !== 'edit';
+  const markdownSnapshot = useMemo(
     () => (
-      viewMode !== 'edit' && typeof renderedContent === 'string' && renderedContent
-        ? extractToc(renderedContent)
-        : []
+      rendersPreview && typeof previewContent === 'string'
+        ? createMarkdownSnapshot(previewContent)
+        : null
     ),
-    [renderedContent, viewMode],
+    [previewContent, rendersPreview],
   );
+  const toc = markdownSnapshot?.toc || [];
   const hasDocument = current !== null && (content !== null || draft !== null);
   const hasSidebarContent = workspaces.length > 0 || recents.length > 0;
   const showSidebar = Boolean(!isFileLaunch && hasSidebarContent && sidebarOpen);
@@ -2732,7 +2741,8 @@ export default function App() {
 
           {hasDocument && viewMode === 'preview' && (
             <MarkdownView
-              content={renderedContent}
+              content={previewContent}
+              snapshot={markdownSnapshot}
               theme={theme}
               resolveImageSource={current?.path ? resolveImageSource : undefined}
               findQuery={findOpen ? findQuery : ''}
@@ -2788,7 +2798,8 @@ export default function App() {
                 )}
               >
                 <MarkdownView
-                  content={renderedContent}
+                  content={previewContent}
+                  snapshot={markdownSnapshot}
                   theme={theme}
                   resolveImageSource={current?.path ? resolveImageSource : undefined}
                   findQuery={findOpen ? findQuery : ''}

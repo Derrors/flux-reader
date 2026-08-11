@@ -71,5 +71,8 @@ jobs:
           npm run version:check
           npm test
 
+      - name: Test built reader entries in Chromium
+        run: npm run test:render-contract
+
       - name: Build fnOS production app
         run: npm run build:fnos

@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flux-reader.local/contracts/safe-save/v1/schema.json",
+  "title": "Flux Reader Safe Save Contract v1",
+  "oneOf": [
+    { "$ref": "#/$defs/saveRequest" },
+    { "$ref": "#/$defs/saveOutcome" },
+    { "$ref": "#/$defs/scenarioCorpus" }
+  ],
+  "$defs": {
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readable", "writable", "supportsCreate", "supportsSaveAs"],
+      "properties": {
+        "readable": { "type": "boolean" },
+        "writable": { "type": "boolean" },
+        "supportsCreate": { "type": "boolean" },
+        "supportsSaveAs": { "type": "boolean" }
+      }
+    },
+    "implementationSemantics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["writeVisibility", "recoveryLocation"],
+      "properties": {
+        "writeVisibility": {
+          "enum": ["atomicReplace", "recoverableInPlace"]
+        },
+        "recoveryLocation": {
+          "enum": ["private", "sidecar"]
+        }
+      }
+    },
+    "documentSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "locator",
+        "version",
+        "contentIncluded",
+        "byteCount",
+        "capabilities",
+        "implementationSemantics"
+      ],
+      "properties": {
+        "locator": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "content": { "type": "string" },
+        "contentIncluded": { "type": "boolean" },
+        "byteCount": { "type": "integer", "minimum": 0 },
+        "capabilities": { "$ref": "#/$defs/capabilities" },
+        "implementationSemantics": { "$ref": "#/$defs/implementationSemantics" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "contentIncluded": { "const": true } },
+            "required": ["contentIncluded"]
+          },
+          "then": { "required": ["content"] },
+          "else": { "not": { "required": ["content"] } }
+        }
+      ]
+    },
+    "saveRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locator", "baseVersion", "content", "intent"],
+      "properties": {
+        "locator": { "type": "string", "minLength": 1 },
+        "baseVersion": { "type": ["string", "null"] },
+        "content": { "type": "string" },
+        "intent": { "enum": ["update", "create", "saveAs", "restore"] }
+      }
+    },
+    "recoveryReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reference"],
+      "properties": {
+        "kind": { "enum": ["privateJournal", "retainedSidecar", "cleanupPending"] },
+        "reference": { "type": "string", "minLength": 1 },
+        "phase": { "type": "string", "minLength": 1 }
+      }
+    },
+    "rejectionReason": {
+      "enum": [
+        "conflict",
+        "permission",
+        "invalidTarget",
+        "tooLarge",
+        "invalidUTF8",
+        "resourceExhausted",
+        "unavailable",
+        "cancelled",
+        "internal"
+      ]
+    },
+    "committedOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "kind", "snapshot", "recoveryReferences"],
+      "properties": {
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "committed" },
+        "snapshot": { "$ref": "#/$defs/documentSnapshot" },
+        "recoveryReferences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/recoveryReference" }
+        }
+      }
+    },
+    "rejectedOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "kind", "reason"],
+      "properties": {
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "rejected" },
+        "reason": { "$ref": "#/$defs/rejectionReason" },
+        "currentVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "recoveryRequiredOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "kind",
+        "commitState",
+        "recoveryReferences"
+      ],
+      "properties": {
+        "contractVersion": { "const": 1 },
+        "kind": { "const": "recoveryRequired" },
+        "commitState": { "enum": ["notCommitted", "committed", "unknown"] },
+        "recoveryReferences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/recoveryReference" }
+        },
+        "currentVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "saveOutcome": {
+      "oneOf": [
+        { "$ref": "#/$defs/committedOutcome" },
+        { "$ref": "#/$defs/rejectedOutcome" },
+        { "$ref": "#/$defs/recoveryRequiredOutcome" }
+      ]
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "description",
+        "intent",
+        "precondition",
+        "event",
+        "expected",
+        "platformSignals",
+        "evidence"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]+$" },
+        "description": { "type": "string", "minLength": 1 },
+        "intent": { "enum": ["update", "create", "saveAs", "restore"] },
+        "precondition": { "type": "string", "minLength": 1 },
+        "event": { "type": "string", "minLength": 1 },
+        "expected": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "disk"],
+          "properties": {
+            "kind": { "enum": ["committed", "rejected", "recoveryRequired"] },
+            "reason": { "$ref": "#/$defs/rejectionReason" },
+            "commitState": { "enum": ["notCommitted", "committed", "unknown"] },
+            "disk": { "enum": ["newContent", "originalContent", "externalContent", "explicitRecovery"] }
+          }
+        },
+        "platformSignals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fnos", "macos"],
+          "properties": {
+            "fnos": { "type": "string", "minLength": 1 },
+            "macos": { "type": "string", "minLength": 1 }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fnos", "macos"],
+          "properties": {
+            "fnos": { "type": "string", "minLength": 1 },
+            "macos": { "type": "string", "minLength": 1 }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "expected": { "properties": { "kind": { "const": "rejected" } } } }
+          },
+          "then": { "properties": { "expected": { "required": ["reason"] } } }
+        },
+        {
+          "if": {
+            "properties": { "expected": { "properties": { "kind": { "const": "recoveryRequired" } } } }
+          },
+          "then": { "properties": { "expected": { "required": ["commitState"] } } }
+        }
+      ]
+    },
+    "scenarioCorpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "scenarios"],
+      "properties": {
+        "contractVersion": { "const": 1 },
+        "scenarios": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/scenario" }
+        }
+      }
+    }
+  }
+}

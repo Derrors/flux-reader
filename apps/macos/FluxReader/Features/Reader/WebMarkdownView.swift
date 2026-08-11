@@ -55,6 +55,8 @@ final class SplitScrollSynchronizer: ObservableObject {
 }
 
 struct WebMarkdownView: NSViewRepresentable {
+  static let isHandoffEnabled =
+    ProcessInfo.processInfo.environment["FLUX_READER_DISABLE_WEB_HANDOFF"] != "1"
   static let rendererURL = Bundle.main.url(
     forResource: "macos",
     withExtension: "html",
@@ -69,6 +71,8 @@ struct WebMarkdownView: NSViewRepresentable {
   let findCaseSensitive: Bool
   let activeFindMatch: Int
   let scrollSynchronizer: SplitScrollSynchronizer?
+  let onRenderPending: @MainActor () -> Void
+  let onContentDidPaint: @MainActor () -> Void
   let onFailure: @MainActor () -> Void
 
   @Environment(\.colorScheme) private var colorScheme
@@ -79,6 +83,8 @@ struct WebMarkdownView: NSViewRepresentable {
     findCaseSensitive: Bool = false,
     activeFindMatch: Int = 0,
     scrollSynchronizer: SplitScrollSynchronizer? = nil,
+    onRenderPending: @escaping @MainActor () -> Void = {},
+    onContentDidPaint: @escaping @MainActor () -> Void = {},
     onFailure: @escaping @MainActor () -> Void
   ) {
     self.document = document
@@ -86,12 +92,16 @@ struct WebMarkdownView: NSViewRepresentable {
     self.findCaseSensitive = findCaseSensitive
     self.activeFindMatch = activeFindMatch
     self.scrollSynchronizer = scrollSynchronizer
+    self.onRenderPending = onRenderPending
+    self.onContentDidPaint = onContentDidPaint
     self.onFailure = onFailure
   }
 
   func makeCoordinator() -> Coordinator {
     Coordinator(
       scrollSynchronizer: scrollSynchronizer,
+      onRenderPending: onRenderPending,
+      onContentDidPaint: onContentDidPaint,
       onFailure: onFailure
     )
   }
@@ -99,6 +109,7 @@ struct WebMarkdownView: NSViewRepresentable {
   func makeNSView(context: Context) -> WKWebView {
     let contentController = WKUserContentController()
     contentController.add(context.coordinator, name: Coordinator.readyHandlerName)
+    contentController.add(context.coordinator, name: Coordinator.contentDidPaintHandlerName)
     contentController.add(context.coordinator, name: Coordinator.copyTextHandlerName)
     contentController.add(context.coordinator, name: Coordinator.scrollHandlerName)
 
@@ -113,6 +124,7 @@ struct WebMarkdownView: NSViewRepresentable {
     }
 
     let webView = WKWebView(frame: .zero, configuration: configuration)
+    webView.alphaValue = Self.isHandoffEnabled ? 0 : 1
     webView.allowsMagnification = true
     webView.navigationDelegate = context.coordinator
     webView.uiDelegate = context.coordinator
@@ -131,6 +143,8 @@ struct WebMarkdownView: NSViewRepresentable {
 
   func updateNSView(_ webView: WKWebView, context: Context) {
     context.coordinator.onFailure = onFailure
+    context.coordinator.onRenderPending = onRenderPending
+    context.coordinator.onContentDidPaint = onContentDidPaint
     context.coordinator.updateScrollSynchronizer(scrollSynchronizer)
     context.coordinator.update(
       document: document,
@@ -175,10 +189,13 @@ struct WebMarkdownView: NSViewRepresentable {
     WKUIDelegate, SplitScrollEndpoint
   {
     static let readyHandlerName = "rendererReady"
+    static let contentDidPaintHandlerName = "contentDidPaint"
     static let copyTextHandlerName = "copyText"
     static let scrollHandlerName = "scrollPosition"
 
     var onFailure: @MainActor () -> Void
+    var onRenderPending: @MainActor () -> Void
+    var onContentDidPaint: @MainActor () -> Void
     let documentResourceHandler = DocumentResourceSchemeHandler()
 
     private weak var webView: WKWebView?
@@ -187,6 +204,9 @@ struct WebMarkdownView: NSViewRepresentable {
     private var lastRenderedPayload: RenderPayload?
     private var rendererReady = false
     private var didReportFailure = false
+    private var webContentRetryBudget = WebContentRetryBudget()
+    private var handoffTracker = RenderHandoffTracker()
+    private var paintTimeoutTask: Task<Void, Never>?
     private var lastResourceDocument: MarkdownDocument?
     private var resourceToken = UUID().uuidString
     private var pendingScrollFraction: Double?
@@ -194,9 +214,13 @@ struct WebMarkdownView: NSViewRepresentable {
 
     init(
       scrollSynchronizer: SplitScrollSynchronizer?,
+      onRenderPending: @escaping @MainActor () -> Void,
+      onContentDidPaint: @escaping @MainActor () -> Void,
       onFailure: @escaping @MainActor () -> Void
     ) {
       self.scrollSynchronizer = scrollSynchronizer
+      self.onRenderPending = onRenderPending
+      self.onContentDidPaint = onContentDidPaint
       self.onFailure = onFailure
       super.init()
       scrollSynchronizer?.attach(self, to: .preview)
@@ -207,11 +231,17 @@ struct WebMarkdownView: NSViewRepresentable {
     }
 
     func detach(from webView: WKWebView) {
+      paintTimeoutTask?.cancel()
+      paintTimeoutTask = nil
+      handoffTracker.invalidate()
       if let scrollSynchronizer {
         scrollSynchronizer.detach(self, from: .preview)
       }
       webView.configuration.userContentController.removeScriptMessageHandler(
         forName: Self.readyHandlerName
+      )
+      webView.configuration.userContentController.removeScriptMessageHandler(
+        forName: Self.contentDidPaintHandlerName
       )
       webView.configuration.userContentController.removeScriptMessageHandler(
         forName: Self.copyTextHandlerName
@@ -249,7 +279,8 @@ struct WebMarkdownView: NSViewRepresentable {
         document: document,
         resourceToken: resourceToken
       )
-      pendingPayload = RenderPayload(
+      let candidate = RenderPayload(
+        generation: "",
         content: document.content,
         title: document.displayName,
         theme: theme,
@@ -258,6 +289,25 @@ struct WebMarkdownView: NSViewRepresentable {
         findCaseSensitive: findCaseSensitive,
         activeFindMatch: activeFindMatch
       )
+      guard pendingPayload?.isEquivalent(to: candidate) != true else {
+        renderIfReady()
+        return
+      }
+
+      let hidesVisibleContent = pendingPayload?.hasSameVisibleContent(as: candidate) != true
+      pendingPayload = RenderPayload(
+        generation: UUID().uuidString,
+        content: candidate.content,
+        title: candidate.title,
+        theme: candidate.theme,
+        resourceToken: candidate.resourceToken,
+        findQuery: candidate.findQuery,
+        findCaseSensitive: candidate.findCaseSensitive,
+        activeFindMatch: candidate.activeFindMatch
+      )
+      if let pendingPayload {
+        beginHandoff(for: pendingPayload, hidesVisibleContent: hidesVisibleContent)
+      }
       renderIfReady()
     }
 
@@ -279,6 +329,8 @@ struct WebMarkdownView: NSViewRepresentable {
         rendererReady = true
         renderIfReady()
         flushPendingScrollFraction()
+      case Self.contentDidPaintHandlerName:
+        acceptContentDidPaint(message.body)
       case Self.copyTextHandlerName:
         copyText(message.body)
       case Self.scrollHandlerName:
@@ -347,7 +399,17 @@ struct WebMarkdownView: NSViewRepresentable {
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-      reportFailure()
+      guard webContentRetryBudget.consume() else {
+        reportFailure()
+        return
+      }
+
+      rendererReady = false
+      lastRenderedPayload = nil
+      if let pendingPayload {
+        beginHandoff(for: pendingPayload, hidesVisibleContent: true)
+      }
+      loadRenderer()
     }
 
     private func renderIfReady() {
@@ -360,6 +422,7 @@ struct WebMarkdownView: NSViewRepresentable {
 
       lastRenderedPayload = pendingPayload
       let arguments: [String: Any] = [
+        "generation": pendingPayload.generation,
         "content": pendingPayload.content,
         "title": pendingPayload.title,
         "theme": pendingPayload.theme,
@@ -442,12 +505,68 @@ struct WebMarkdownView: NSViewRepresentable {
     private func reportFailure() {
       guard !didReportFailure else { return }
       didReportFailure = true
+      paintTimeoutTask?.cancel()
+      paintTimeoutTask = nil
+      handoffTracker.invalidate()
       onFailure()
+    }
+
+    private func beginHandoff(
+      for payload: RenderPayload,
+      hidesVisibleContent: Bool
+    ) {
+      handoffTracker.begin(generation: payload.generation)
+      paintTimeoutTask?.cancel()
+      if WebMarkdownView.isHandoffEnabled && hidesVisibleContent {
+        webView?.alphaValue = 0
+
+        let generation = payload.generation
+        Task { @MainActor [weak self] in
+          guard self?.handoffTracker.pendingGeneration == generation else { return }
+          self?.onRenderPending()
+        }
+      }
+
+      let generation = payload.generation
+      paintTimeoutTask = Task { @MainActor [weak self] in
+        do {
+          try await Task.sleep(for: .seconds(10))
+        } catch {
+          return
+        }
+        guard self?.handoffTracker.pendingGeneration == generation else { return }
+        self?.reportFailure()
+      }
+    }
+
+    private func acceptContentDidPaint(_ body: Any) {
+      guard
+        let payload = body as? [String: Any],
+        let generation = payload["generation"] as? String,
+        let theme = payload["theme"] as? String,
+        let hasContent = payload["hasContent"] as? Bool,
+        let pendingPayload,
+        pendingPayload.generation == generation,
+        pendingPayload.theme == theme,
+        hasContent == !pendingPayload.content.isEmpty,
+        handoffTracker.accept(generation: generation)
+      else { return }
+
+      paintTimeoutTask?.cancel()
+      paintTimeoutTask = nil
+      if let webView {
+        NSAnimationContext.runAnimationGroup { context in
+          context.duration = 0.12
+          webView.animator().alphaValue = 1
+        }
+      }
+      onContentDidPaint()
     }
   }
 }
 
 private struct RenderPayload: Equatable {
+  let generation: String
   let content: String
   let title: String
   let theme: String
@@ -455,6 +574,50 @@ private struct RenderPayload: Equatable {
   let findQuery: String
   let findCaseSensitive: Bool
   let activeFindMatch: Int
+
+  func isEquivalent(to other: RenderPayload) -> Bool {
+    content == other.content
+      && title == other.title
+      && theme == other.theme
+      && resourceToken == other.resourceToken
+      && findQuery == other.findQuery
+      && findCaseSensitive == other.findCaseSensitive
+      && activeFindMatch == other.activeFindMatch
+  }
+
+  func hasSameVisibleContent(as other: RenderPayload) -> Bool {
+    content == other.content
+      && theme == other.theme
+      && resourceToken == other.resourceToken
+  }
+}
+
+struct RenderHandoffTracker {
+  private(set) var pendingGeneration: String?
+
+  mutating func begin(generation: String) {
+    pendingGeneration = generation
+  }
+
+  mutating func accept(generation: String) -> Bool {
+    guard pendingGeneration == generation else { return false }
+    pendingGeneration = nil
+    return true
+  }
+
+  mutating func invalidate() {
+    pendingGeneration = nil
+  }
+}
+
+struct WebContentRetryBudget {
+  private(set) var remainingAttempts = 1
+
+  mutating func consume() -> Bool {
+    guard remainingAttempts > 0 else { return false }
+    remainingAttempts -= 1
+    return true
+  }
 }
 
 @MainActor

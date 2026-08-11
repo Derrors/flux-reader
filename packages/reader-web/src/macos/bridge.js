@@ -1,4 +1,5 @@
 export const DEFAULT_RENDER_PAYLOAD = Object.freeze({
+  generation: '',
   content: '',
   title: 'Flux Reader',
   theme: 'light',
@@ -26,6 +27,8 @@ export function normalizeRenderPayload(value) {
   }
 
   return {
+    generation:
+      typeof value.generation === 'string' ? value.generation.slice(0, 128) : '',
     content: typeof value.content === 'string' ? value.content : '',
     title:
       typeof value.title === 'string' && value.title.trim()

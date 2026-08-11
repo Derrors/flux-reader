@@ -9,20 +9,49 @@ struct MarkdownRendererView: View {
   var scrollSynchronizer: SplitScrollSynchronizer? = nil
 
   @State private var usesNativeFallback = false
+  @State private var isWebContentVisible = !WebMarkdownView.isHandoffEnabled
 
   var body: some View {
     VStack(spacing: 0) {
-      if WebMarkdownView.rendererURL != nil && !usesNativeFallback {
-        WebMarkdownView(
-          document: document,
-          findQuery: findQuery,
-          findCaseSensitive: findCaseSensitive,
-          activeFindMatch: activeFindMatch,
-          scrollSynchronizer: scrollSynchronizer,
-          onFailure: { usesNativeFallback = true }
-        )
-      } else {
-        NativeMarkdownView(document: document)
+      ZStack {
+        if !isWebContentVisible || usesNativeFallback || WebMarkdownView.rendererURL == nil {
+          Group {
+            if usesNativeFallback || WebMarkdownView.rendererURL == nil {
+              NativeMarkdownView(document: document)
+            } else {
+              NativeMarkdownPlaceholderView(document: document)
+            }
+          }
+          .accessibilityIdentifier("flux-reader-native-placeholder")
+        }
+
+        if WebMarkdownView.rendererURL != nil && !usesNativeFallback {
+          WebMarkdownView(
+            document: document,
+            findQuery: findQuery,
+            findCaseSensitive: findCaseSensitive,
+            activeFindMatch: activeFindMatch,
+            scrollSynchronizer: scrollSynchronizer,
+            onRenderPending: {
+              if WebMarkdownView.isHandoffEnabled {
+                isWebContentVisible = false
+              }
+            },
+            onContentDidPaint: {
+              withAnimation(.easeOut(duration: 0.12)) {
+                isWebContentVisible = true
+              }
+            },
+            onFailure: {
+              isWebContentVisible = false
+              usesNativeFallback = true
+            }
+          )
+          .opacity(isWebContentVisible ? 1 : 0)
+          .allowsHitTesting(isWebContentVisible)
+          .accessibilityHidden(!isWebContentVisible)
+          .accessibilityIdentifier("flux-reader-web-preview")
+        }
       }
 
       Divider()
@@ -31,6 +60,7 @@ struct MarkdownRendererView: View {
     }
     .onChange(of: document.id) { _, _ in
       usesNativeFallback = false
+      isWebContentVisible = !WebMarkdownView.isHandoffEnabled
     }
   }
 }

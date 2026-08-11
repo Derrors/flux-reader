@@ -33,6 +33,8 @@
 		A30000000000000000000018 /* FluxReaderUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001C /* FluxReaderUITests.swift */; };
 		A30000000000000000000019 /* DraftRecoveryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001E /* DraftRecoveryStore.swift */; };
 		A3000000000000000000001A /* RetainedFileRecoveryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001F /* RetainedFileRecoveryStore.swift */; };
+		A3000000000000000000001B /* SafeSaveContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* SafeSaveContract.swift */; };
+		A3000000000000000000001C /* SafeSaveContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000021 /* SafeSaveContractTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -84,6 +86,8 @@
 		A2000000000000000000001D /* FluxReaderUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluxReaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A2000000000000000000001E /* DraftRecoveryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftRecoveryStore.swift; sourceTree = "<group>"; };
 		A2000000000000000000001F /* RetainedFileRecoveryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetainedFileRecoveryStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000020 /* SafeSaveContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeSaveContract.swift; sourceTree = "<group>"; };
+		A20000000000000000000021 /* SafeSaveContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeSaveContractTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -192,6 +196,7 @@
 				A20000000000000000000018 /* WorkspaceWatcher.swift */,
 				A2000000000000000000001E /* DraftRecoveryStore.swift */,
 				A2000000000000000000001F /* RetainedFileRecoveryStore.swift */,
+				A20000000000000000000020 /* SafeSaveContract.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -216,6 +221,7 @@
 				A20000000000000000000015 /* ReaderViewModelTests.swift */,
 				A20000000000000000000019 /* WorkspaceSearchServiceTests.swift */,
 				A2000000000000000000001A /* WorkspaceWatcherTests.swift */,
+				A20000000000000000000021 /* SafeSaveContractTests.swift */,
 			);
 			path = FluxReaderTests;
 			sourceTree = "<group>";
@@ -398,6 +404,7 @@
 				A30000000000000000000014 /* WorkspaceWatcher.swift in Sources */,
 				A30000000000000000000019 /* DraftRecoveryStore.swift in Sources */,
 				A3000000000000000000001A /* RetainedFileRecoveryStore.swift in Sources */,
+				A3000000000000000000001B /* SafeSaveContract.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -412,6 +419,7 @@
 				A30000000000000000000011 /* ReaderViewModelTests.swift in Sources */,
 				A30000000000000000000015 /* WorkspaceSearchServiceTests.swift in Sources */,
 				A30000000000000000000016 /* WorkspaceWatcherTests.swift in Sources */,
+				A3000000000000000000001C /* SafeSaveContractTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -559,7 +567,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.24;
+				MARKETING_VERSION = 0.1.25;
 				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -585,7 +593,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.24;
+				MARKETING_VERSION = 0.1.25;
 				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

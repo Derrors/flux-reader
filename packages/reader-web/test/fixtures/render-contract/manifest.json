@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "file": "gfm.md",
+      "selectorCounts": {
+        "h1": 1,
+        ".table-container": 1,
+        "input[type=checkbox][disabled]": 2,
+        "del": 1
+      },
+      "textIncludes": ["GFM Contract", "alpha", "completed"]
+    },
+    {
+      "file": "frontmatter-setext.md",
+      "selectorCounts": {
+        ".table-container": 1,
+        "hr": 1,
+        "h1": 1
+      },
+      "textIncludes": ["字段", "Flux Reader", "Real heading"]
+    },
+    {
+      "file": "math.md",
+      "selectorCounts": {
+        ".math-inline math": 1,
+        ".math-display math": 1
+      },
+      "textIncludes": ["Price is $5", "x"]
+    },
+    {
+      "file": "mermaid.md",
+      "selectorCounts": {
+        ".mermaid-block, .mermaid-error, .mermaid-loading": 2
+      },
+      "textIncludes": ["Valid diagram", "Invalid diagram"],
+      "terminal": {
+        "selectorCounts": {
+          ".mermaid-loading": 0,
+          ".mermaid-block": 1,
+          ".mermaid-error": 1,
+          ".mermaid-canvas svg": 1
+        }
+      }
+    },
+    {
+      "file": "code.md",
+      "selectorCounts": {
+        ".code-block": 2,
+        ".code-block-lang": 2
+      },
+      "textIncludes": ["javascript", "unknown-language", "const answer"],
+      "codeSources": ["const answer = 42;", "raw <tag> text"],
+      "terminal": {
+        "selectorCounts": {
+          ".code-block[data-render-state=highlighted]": 1,
+          ".code-block[data-render-state=skipped]": 1,
+          ".shiki-wrapper .shiki": 1
+        }
+      }
+    },
+    {
+      "file": "images.md",
+      "selectorCounts": {
+        ".image-group": 1,
+        ".image-group img": 2
+      },
+      "textIncludes": []
+    },
+    {
+      "file": "unsafe-html.md",
+      "selectorCounts": {
+        "script": 0,
+        "img[src^=javascript]": 0,
+        "a[href^=javascript]": 0,
+        "input:not([type=checkbox])": 0
+      },
+      "textIncludes": ["Safe text"]
+    },
+    {
+      "file": "find-and-headings.md",
+      "props": {
+        "findQuery": "needle",
+        "findCaseSensitive": false,
+        "activeFindMatch": 1
+      },
+      "selectorCounts": {
+        "h1#first": 1,
+        "h2#second": 1,
+        "mark.markdown-find-match": 3,
+        "mark.markdown-find-match.is-active[data-find-match=\"1\"]": 1
+      },
+      "textIncludes": ["Needle", "needle", "NEEDLE"]
+    }
+  ]
+}

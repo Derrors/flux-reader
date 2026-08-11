@@ -76,6 +76,29 @@ final class SplitScrollSynchronizerTests: XCTestCase {
 }
 
 final class WebRendererTests: XCTestCase {
+  func testRenderHandoffAcceptsOnlyCurrentGenerationOnce() {
+    var tracker = RenderHandoffTracker()
+    tracker.begin(generation: "generation-1")
+
+    XCTAssertFalse(tracker.accept(generation: "stale-generation"))
+    XCTAssertEqual(tracker.pendingGeneration, "generation-1")
+    XCTAssertTrue(tracker.accept(generation: "generation-1"))
+    XCTAssertNil(tracker.pendingGeneration)
+    XCTAssertFalse(tracker.accept(generation: "generation-1"))
+
+    tracker.begin(generation: "generation-2")
+    tracker.invalidate()
+    XCTAssertFalse(tracker.accept(generation: "generation-2"))
+  }
+
+  func testWebContentRetryBudgetAllowsExactlyOneAutomaticReload() {
+    var budget = WebContentRetryBudget()
+    XCTAssertEqual(budget.remainingAttempts, 1)
+    XCTAssertTrue(budget.consume())
+    XCTAssertEqual(budget.remainingAttempts, 0)
+    XCTAssertFalse(budget.consume())
+  }
+
   @MainActor
   func testBundledRendererEntryAndConfiguration() throws {
     let rendererURL = try XCTUnwrap(WebMarkdownView.rendererURL)
@@ -124,6 +147,75 @@ final class WebRendererTests: XCTestCase {
         forURLScheme: DocumentResourceSchemeHandler.scheme
       )
     )
+  }
+
+  @MainActor
+  func testContractBuildRendersSharedManifestInWKWebView() async throws {
+    let contractRoot =
+      repositoryRoot
+      .appendingPathComponent("packages/reader-web/dist-contract-macos", isDirectory: true)
+    let entryURL = contractRoot.appendingPathComponent("macos.html")
+    guard FileManager.default.fileExists(atPath: entryURL.path) else {
+      XCTFail(
+        "Missing macOS render-contract build. Run npm --prefix packages/reader-web run build:contract:macos first."
+      )
+      return
+    }
+
+    let manifestURL =
+      repositoryRoot
+      .appendingPathComponent("packages/reader-web/test/fixtures/render-contract/manifest.json")
+    let manifest = try JSONDecoder().decode(
+      RenderContractManifest.self,
+      from: Data(contentsOf: manifestURL)
+    )
+
+    let configuration = WKWebViewConfiguration()
+    configuration.websiteDataStore = .nonPersistent()
+    configuration.setURLSchemeHandler(
+      RendererSchemeHandler(rootURL: contractRoot),
+      forURLScheme: RendererSchemeHandler.scheme
+    )
+    let webView = WKWebView(
+      frame: CGRect(x: 0, y: 0, width: 1_024, height: 768), configuration: configuration)
+
+    for contractCase in manifest.cases {
+      var components = URLComponents(
+        url: WebMarkdownView.rendererEntryURL, resolvingAgainstBaseURL: false)
+      components?.queryItems = [URLQueryItem(name: "case", value: contractCase.file)]
+      let url = try XCTUnwrap(components?.url)
+      webView.load(URLRequest(url: url))
+      let result = try await waitForRenderContract(
+        in: webView,
+        file: contractCase.file,
+        entry: "macos"
+      )
+      XCTAssertEqual(result.failures, [], contractCase.file)
+
+      switch contractCase.file {
+      case "math.md":
+        let mathCount = try await elementCount(
+          ".math-inline math, .math-display math",
+          in: webView
+        )
+        XCTAssertEqual(mathCount, 2)
+      case "mermaid.md":
+        let diagramCount = try await elementCount(".mermaid-canvas svg", in: webView)
+        let diagramErrorCount = try await elementCount(".mermaid-error", in: webView)
+        XCTAssertEqual(diagramCount, 1)
+        XCTAssertEqual(diagramErrorCount, 1)
+      case "code.md":
+        let highlightedCount = try await elementCount(".shiki-wrapper .shiki", in: webView)
+        let skippedCount = try await elementCount(
+          ".code-block[data-render-state=skipped]",
+          in: webView
+        )
+        XCTAssertEqual(highlightedCount, 1)
+        XCTAssertEqual(skippedCount, 1)
+      default:
+        break
+      }
+    }
   }
 
   func testDocumentResourceResolverStaysInsideWorkspaceAndRejectsSymlinkEscape() throws {
@@ -231,4 +323,93 @@ final class WebRendererTests: XCTestCase {
     components.queryItems = [URLQueryItem(name: "path", value: source)]
     return try XCTUnwrap(components.url)
   }
+
+  @MainActor
+  private func waitForRenderContract(
+    in webView: WKWebView,
+    file: String,
+    entry: String
+  ) async throws -> RenderContractResult {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(20))
+    var lastSnapshot: String?
+
+    while clock.now < deadline {
+      do {
+        lastSnapshot =
+          try await webView.evaluateJavaScript(
+            """
+            JSON.stringify({
+              state: document.documentElement.dataset.renderContractState || null,
+              entry: document.documentElement.dataset.renderContractEntry || null,
+              file: document.documentElement.dataset.renderContractCase || null,
+              result: globalThis.__FLUX_READER_RENDER_CONTRACT__ || null
+            })
+            """
+          ) as? String
+        if let lastSnapshot,
+          let data = lastSnapshot.data(using: .utf8),
+          let snapshot = try? JSONDecoder().decode(RenderContractSnapshot.self, from: data),
+          snapshot.entry == entry,
+          snapshot.file == file,
+          let result = snapshot.result,
+          snapshot.state == "passed" || snapshot.state == "failed"
+        {
+          if snapshot.state == "failed" {
+            XCTFail("\(entry)/\(file): \(result.failures.joined(separator: "; "))")
+          }
+          return result
+        }
+      } catch {
+        // Navigation can briefly invalidate the JavaScript execution context.
+        // The contract state itself is the readiness signal, so retry until
+        // the bounded deadline instead of sleeping for a guessed render time.
+      }
+      try await Task.sleep(for: .milliseconds(50))
+    }
+
+    XCTFail("Timed out waiting for \(entry)/\(file). Last state: \(lastSnapshot ?? "<none>")")
+    throw RenderContractTestError.timedOut
+  }
+
+  @MainActor
+  private func elementCount(_ selector: String, in webView: WKWebView) async throws -> Int {
+    let encodedSelector = try JSONEncoder().encode(selector)
+    let selectorLiteral = try XCTUnwrap(String(data: encodedSelector, encoding: .utf8))
+    let value = try await webView.evaluateJavaScript(
+      "document.querySelectorAll(\(selectorLiteral)).length"
+    )
+    return try XCTUnwrap((value as? NSNumber)?.intValue)
+  }
+
+  private var repositoryRoot: URL {
+    URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+  }
+}
+
+private struct RenderContractManifest: Decodable {
+  struct ContractCase: Decodable {
+    let file: String
+  }
+
+  let cases: [ContractCase]
+}
+
+private struct RenderContractSnapshot: Decodable {
+  let state: String?
+  let entry: String?
+  let file: String?
+  let result: RenderContractResult?
+}
+
+private struct RenderContractResult: Decodable {
+  let failures: [String]
+}
+
+private enum RenderContractTestError: Error {
+  case timedOut
 }

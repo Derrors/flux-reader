@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { writeClipboardText } from '../platform/clipboard';
+import { RENDER_FEATURES } from '../renderFeatures';
 import { highlightCode, isHugeCode } from './highlight';
 import Mermaid from './Mermaid';
 
@@ -18,11 +19,17 @@ const MAX_COLLAPSED_LINES = 20;
  * Hook 数量变化会触发 "Rendered fewer/more hooks than expected"
  * 并使整棵渲染树报错。拆开后每个组件实例的 Hook 顺序恒定。
  */
-function HighlightedCodeBlock({ code, language, theme }) {
+function HighlightedCodeBlock({ code, language, theme, highlightSessionId }) {
   const [html, setHtml] = useState(null);
+  const [renderState, setRenderState] = useState('deferred');
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [nearViewport, setNearViewport] = useState(
+    () => !RENDER_FEATURES.viewportHighlighting
+      || typeof IntersectionObserver !== 'function',
+  );
   const aliveRef = useRef(true);
+  const containerRef = useRef(null);
 
   const lineCount = code ? code.split('\n').length : 0;
   const collapsible = lineCount > MAX_COLLAPSED_LINES;
@@ -36,22 +43,61 @@ function HighlightedCodeBlock({ code, language, theme }) {
   }, []);
 
   useEffect(() => {
+    if (
+      nearViewport
+      || !RENDER_FEATURES.viewportHighlighting
+      || typeof IntersectionObserver !== 'function'
+    ) return undefined;
+    const element = containerRef.current;
+    if (!element) return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setNearViewport(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: '800px 0px' });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [nearViewport]);
+
+  useEffect(() => {
+    const renderForPrint = () => setNearViewport(true);
+    window.addEventListener('beforeprint', renderForPrint);
+    return () => window.removeEventListener('beforeprint', renderForPrint);
+  }, []);
+
+  useEffect(() => {
+    setHtml(null);
     if (huge) {
-      setHtml(null);
+      setRenderState('skipped');
       return;
     }
+    if (!nearViewport) {
+      setRenderState('deferred');
+      return;
+    }
+    setRenderState('loading');
     let cancelled = false;
-    highlightCode(code, language, theme)
+    highlightCode(code, language, theme, {
+      sessionId: highlightSessionId,
+      priority: 100,
+    })
       .then((out) => {
-        if (!cancelled && aliveRef.current) setHtml(out);
+        if (!cancelled && aliveRef.current) {
+          setHtml(out);
+          setRenderState(out ? 'highlighted' : 'skipped');
+        }
       })
       .catch(() => {
-        if (!cancelled && aliveRef.current) setHtml(null);
+        if (!cancelled && aliveRef.current) {
+          setHtml(null);
+          setRenderState('error');
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [code, language, theme, huge]);
+  }, [code, highlightSessionId, language, nearViewport, theme, huge]);
 
   const copy = async () => {
     try {
@@ -69,7 +115,11 @@ function HighlightedCodeBlock({ code, language, theme }) {
       : undefined;
 
   return (
-    <div className="code-block">
+    <div
+      ref={containerRef}
+      className="code-block"
+      data-render-state={renderState}
+    >
       <div className="code-block-header" data-copy-ignore>
         <span className="code-block-lang">{language || 'text'}</span>
         <span className="code-block-actions">
@@ -101,9 +151,16 @@ function HighlightedCodeBlock({ code, language, theme }) {
 }
 
 /** 分派层：只做选择，自身不含任何 Hook */
-export default function CodeBlock({ code, language, theme }) {
+export default function CodeBlock({ code, language, theme, highlightSessionId }) {
   if (language === 'mermaid') {
     return <Mermaid code={code} theme={theme} />;
   }
-  return <HighlightedCodeBlock code={code} language={language} theme={theme} />;
+  return (
+    <HighlightedCodeBlock
+      code={code}
+      language={language}
+      theme={theme}
+      highlightSessionId={highlightSessionId}
+    />
+  );
 }

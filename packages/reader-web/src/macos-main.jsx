@@ -2,15 +2,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Toc from './components/Toc';
 import MarkdownView from './markdown/MarkdownView';
-import { extractToc } from './markdown/pipeline';
+import { createMarkdownSnapshot } from './markdown/pipeline';
 import {
   DEFAULT_RENDER_PAYLOAD,
   normalizeRenderPayload,
   resolveMacOSImageSource,
 } from './macos/bridge';
+import { applyRenderFeatureFlags } from './renderFeatures';
 import './styles/app.css';
 import './styles/markdown.css';
 import './styles/macos.css';
+
+applyRenderFeatureFlags();
 
 let pendingPayload = { ...DEFAULT_RENDER_PAYLOAD };
 let renderListener = null;
@@ -51,6 +54,14 @@ globalThis.fluxReader = Object.freeze({
 
 function notifyNativeRendererReady() {
   globalThis.webkit?.messageHandlers?.rendererReady?.postMessage('ready');
+}
+
+function notifyNativeContentDidPaint(renderState) {
+  globalThis.webkit?.messageHandlers?.contentDidPaint?.postMessage({
+    generation: renderState.generation,
+    theme: renderState.theme,
+    hasContent: Boolean(renderState.content),
+  });
 }
 
 export function MacOSRenderer() {
@@ -114,10 +125,20 @@ export function MacOSDocumentView({ renderState }) {
     () => (source) => resolveMacOSImageSource(source, renderState.resourceToken),
     [renderState.resourceToken],
   );
-  const toc = useMemo(
-    () => (renderState.content ? extractToc(renderState.content) : []),
+  const markdownSnapshot = useMemo(
+    () => createMarkdownSnapshot(renderState.content),
     [renderState.content],
   );
+  const toc = markdownSnapshot.toc;
+
+  useEffect(() => {
+    if (!renderState.generation) return undefined;
+
+    const frame = globalThis.requestAnimationFrame(() => {
+      notifyNativeContentDidPaint(renderState);
+    });
+    return () => globalThis.cancelAnimationFrame(frame);
+  }, [renderState.content, renderState.generation, renderState.theme]);
 
   return (
     <div className="macos-renderer-shell">
@@ -126,6 +147,7 @@ export function MacOSDocumentView({ renderState }) {
           {renderState.content ? (
             <MarkdownView
               content={renderState.content}
+              snapshot={markdownSnapshot}
               theme={renderState.theme}
               resolveImageSource={resolveImageSource}
               findQuery={renderState.findQuery}
@@ -158,5 +180,12 @@ export function MacOSDocumentView({ renderState }) {
 
 const rootElement = document.getElementById('root');
 if (rootElement) {
-  createRoot(rootElement).render(<MacOSRenderer />);
+  const root = createRoot(rootElement);
+  if (import.meta.env.MODE === 'contract-macos') {
+    import('./render-contract/RenderContractHarness').then(({ default: Harness }) => {
+      root.render(<Harness entry="macos" />);
+    });
+  } else {
+    root.render(<MacOSRenderer />);
+  }
 }

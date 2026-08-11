@@ -139,6 +139,7 @@ Xcode 的 `Embed Shared Reader` 构建阶段会自动生成并嵌入 `reader-web
 npm test                              # 发布脚本 + fnOS 后端 + reader-web
 npm run test:fnos                     # fnOS 后端安全与 API 测试
 npm run test:reader                   # React / 渲染 / 状态测试
+npm run test:render-contract          # 两个真实构建入口的 Chromium 契约
 npm run lint:macos                    # Swift 格式检查
 npm run test:macos                    # macOS 原生单元测试
 npm run test:macos-ui-build           # 只编译 macOS UI 测试目标
@@ -155,6 +156,10 @@ npm --prefix packages/reader-web run test:watch
 分栏滚动同步、会话恢复、权限回程、保存冲突、latest-wins 竞态、API 编码和 Markdown
 安全渲染。fnOS 后端测试覆盖路径范围、ACL、稳定文件描述符、保存事务、恢复记录、配额、
 请求取消与优雅退出。macOS 另有 Swift 单元测试及真实 XCUITest。
+
+共享 Markdown corpus 位于 `packages/reader-web/test/fixtures/render-contract/`。快速测试、
+fnOS contract 构建、macOS contract 构建、Chromium 和真实 WKWebView 均读取同一份
+`manifest.json`；KaTeX 断言 MathML，Mermaid 与 Shiki 使用显式完成状态，不依赖固定 sleep。
 
 GitHub Actions 分为：
 
@@ -251,6 +256,8 @@ Flux Reader 的文件和文件夹选择器只调用 `pickFile`，不会通过 `p
   选择恢复版本，再由专用 commit API 完成恢复。
 - 浏览器草稿按 fnOS uid 与规范路径隔离；服务端恢复记录不向浏览器暴露私有路径。
 - 进程收到 SIGTERM / SIGINT 时会停止接收请求并等待活动保存安全收敛。
+- 跨端可观察保存语义定义在 `contracts/safe-save/v1/`；HTTP 响应的 `saveOutcome`
+  使用该契约，底层 inode 事务算法不受 adapter 影响。
 
 fnOS 文件选择器只返回已存在的授权文件，因此当前只保存现有文件，不提供伪造的
 「另存为」。需要新文件时，应先在文件管理器中创建。
@@ -264,12 +271,15 @@ fnOS 文件选择器只返回已存在的授权文件，因此当前只保存现
 - 未保存草稿和最多 12 个标签页的会话记录保存在 Application Support 私有目录。
 - 恢复版本以只读文稿打开，可以另存为，但不能原地编辑覆盖 recovery sidecar。
 - 保存冲突、切换文稿、关闭标签页和退出应用均使用显式保存/放弃/取消决策。
+- Web renderer 只有在当前 generation 回传 `contentDidPaint` 后才接管原生占位；
+  WebContent 退出只重试一次，失败或 10 秒首帧超时后继续显示原生正文。
 
 ## 性能保护
 
 NAS 与桌面环境都设置了明确边界：
 
 - Shiki 在 Web Worker 中运行；8 秒超时后保留纯文本。
+- Worker 使用文稿 session 取消、进行中去重和 8 MiB 有界内存 LRU；视口外代码先显示纯文本。
 - 代码超过 100,000 字符或单行超过 4,000 字符时跳过高亮。
 - 普通可编辑文稿上限 10 MiB；本地图片上限 25 MiB。
 - 最多 8 个工作区、12 个文稿标签页。
@@ -278,6 +288,24 @@ NAS 与桌面环境都设置了明确边界：
 - 最近文稿和轮询优先使用轻量元数据接口，不为探测变化下载正文。
 - 页面隐藏、文件选择器或状态决策打开时暂停刷新，避免重叠请求覆盖新状态。
 - Mermaid、KaTeX 与 Shiki 独立懒加载，降低普通文稿首屏成本。
+- 正文 HTML 与 TOC 共享一次 marked token snapshot；查找活动项、主题和图片 revision
+  不再触发完整 HTML→React 重建。
+- fnOS 与 macOS 的分栏预览都以 120 ms latest-wins 合并连续输入，保存和退出分栏立即 flush。
+- 浏览器支持时对顶层 block 启用 `content-visibility`；该优化不改变 DOM 数量，也不作为
+  放宽 10 MiB 上限的依据。
+
+渲染开关可在构建时独立关闭：
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `VITE_FLUX_VIEWPORT_HIGHLIGHTING` | `true` | 代码块接近视口后再提交 Shiki |
+| `VITE_FLUX_HIGHLIGHT_CACHE` | `true` | 启用有界内存高亮 LRU |
+| `VITE_FLUX_CONTENT_VISIBILITY` | `true` | 启用受浏览器能力检测保护的 CSS 跳过 |
+| `FLUX_READER_DISABLE_WEB_HANDOFF` | 未设置 | 设为 `1` 时关闭 macOS 原生/Web 淡入交接 |
+
+Web 调试环境也可在入口执行前设置 `globalThis.__FLUX_READER_FEATURES__`，用布尔值覆盖前三项。
+生产版不提供面向普通用户的复杂开关界面。完整块级虚拟化的当前决策与重新评审条件见
+[`优化实施记录`](optimization-refactor-implementation.md#m6-gono-go-记录)。
 
 ## 常见问题
 

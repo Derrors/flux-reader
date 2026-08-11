@@ -135,7 +135,7 @@ export default function Mermaid({ code, theme }) {
 
   if (error) {
     return (
-      <div className="mermaid-error">
+      <div className="mermaid-error" data-render-state="error">
         {stage}
         <div className="mermaid-error-title">Mermaid 语法错误</div>
         <pre>{error}</pre>
@@ -146,7 +146,7 @@ export default function Mermaid({ code, theme }) {
 
   if (!svg) {
     return (
-      <div className="mermaid-loading">
+      <div className="mermaid-loading" data-render-state="loading">
         {stage}
         图表渲染中…
       </div>
@@ -154,7 +154,7 @@ export default function Mermaid({ code, theme }) {
   }
 
   return (
-    <div className="mermaid-block">
+    <div className="mermaid-block" data-render-state="rendered">
       {stage}
       <div className="mermaid-toolbar">
         <button type="button" onClick={download} title="下载 SVG">

@@ -125,6 +125,32 @@ final class ReaderViewModelTests: XCTestCase {
   }
 
   @MainActor
+  func testSplitPreviewCoalescesTypingAndPublishesLatestDraft() async throws {
+    let markdownURL = temporaryDirectory.appendingPathComponent("preview-schedule.md")
+    try Data("# Initial".utf8).write(to: markdownURL)
+    let viewModel = ReaderViewModel(
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(),
+      documentSessionStore: InMemoryDocumentSessionStore()
+    )
+
+    viewModel.open(markdownURL)
+    await waitUntil { viewModel.currentDocument != nil }
+    viewModel.setDocumentViewMode(.split)
+    viewModel.draftContent = "# One"
+    viewModel.draftContent = "# Two"
+    viewModel.draftContent = "# Latest"
+
+    XCTAssertEqual(viewModel.previewDocument?.content, "# Initial")
+    await waitUntil { viewModel.previewDocument?.content == "# Latest" }
+
+    viewModel.draftContent = "# Immediate"
+    viewModel.setDocumentViewMode(.preview)
+    XCTAssertEqual(viewModel.previewDocument?.content, "# Immediate")
+  }
+
+  @MainActor
   func testRestoresMultipleTabsActiveTabAndUnsavedDraft() async throws {
     let firstURL = temporaryDirectory.appendingPathComponent("first.md")
     let secondURL = temporaryDirectory.appendingPathComponent("second.md")

@@ -16,7 +16,7 @@ import katex from 'katex';
 // 用浏览器原生 dompurify，而非 isomorphic-dompurify：
 // 后者为 SSR 打包了 jsdom，阅读器纯跑在浏览器里不需要，白增体积。
 import DOMPurify from 'dompurify';
-import { preprocessForToc } from './preprocess';
+import { preprocess } from './preprocess.js';
 
 /* ------------------------------------------------------------------ *
  * 数学公式：KaTeX
@@ -115,6 +115,13 @@ function createMarked() {
 
 const marked = createMarked();
 
+const pipelineDiagnostics = {
+  preprocessCount: 0,
+  lexCount: 0,
+  renderCount: 0,
+  sanitizeCount: 0,
+};
+
 /* ------------------------------------------------------------------ *
  * 工具
  * ------------------------------------------------------------------ */
@@ -189,9 +196,56 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 /**
  * 把 Markdown 源码渲染为已净化的 HTML 字符串。
  */
-export function renderToSafeHtml(source) {
-  const html = marked.parse(source, { async: false });
+function lexMarkdown(source) {
+  pipelineDiagnostics.lexCount += 1;
+  return marked.lexer(source);
+}
+
+function renderTokensToSafeHtml(tokens) {
+  pipelineDiagnostics.renderCount += 1;
+  const html = marked.parser(tokens);
+  pipelineDiagnostics.sanitizeCount += 1;
   return DOMPurify.sanitize(html, PURIFY_CONFIG);
+}
+
+function extractTocFromTokens(tokens) {
+  const toc = [];
+  for (const token of tokens) {
+    if (token.type !== 'heading') continue;
+    const text = stripTags(marked.parseInline(token.text, { async: false }));
+    toc.push({ level: token.depth, text, id: slugify(text) });
+  }
+  return toc;
+}
+
+/**
+ * 为一次正文 generation 建立共享快照。正文 HTML 与 TOC 从同一份 block
+ * tokens 派生，调用方只需按 content identity 缓存这个对象。
+ */
+export function createMarkdownSnapshot(source) {
+  const normalizedSource = String(source || '');
+  pipelineDiagnostics.preprocessCount += 1;
+  const tokens = lexMarkdown(preprocess(normalizedSource));
+  return Object.freeze({
+    source: normalizedSource,
+    tokens,
+    safeHtml: renderTokensToSafeHtml(tokens),
+    toc: extractTocFromTokens(tokens),
+  });
+}
+
+export function getMarkdownPipelineDiagnostics() {
+  return { ...pipelineDiagnostics };
+}
+
+export function resetMarkdownPipelineDiagnostics() {
+  Object.keys(pipelineDiagnostics).forEach((key) => {
+    pipelineDiagnostics[key] = 0;
+  });
+}
+
+export function renderToSafeHtml(source) {
+  return renderTokensToSafeHtml(lexMarkdown(String(source || '')));
 }
 
 /**
@@ -204,21 +258,5 @@ export function renderToSafeHtml(source) {
  * 已由 preprocess 把 frontmatter 转成表格。
  */
 export function extractToc(source) {
-  // 与正文渲染走同一套预处理口径，否则目录与正文会不一致：
-  //  - 剥掉 frontmatter：其 `---` 会被当 setext 下划线，把上一行升格成标题
-  //  - 做 setext 修正：正文里「一行文字 + ---」经预处理后是分隔线，
-  //    若目录不做同样修正，那行文字会以标题身份出现在目录里
-  const body = preprocessForToc(String(source || ''));
-  const tokens = marked.lexer(body);
-  const toc = [];
-  const walk = (list) => {
-    for (const token of list) {
-      if (token.type === 'heading') {
-        const text = stripTags(marked.parseInline(token.text, { async: false }));
-        toc.push({ level: token.depth, text, id: slugify(text) });
-      }
-    }
-  };
-  walk(tokens);
-  return toc;
+  return createMarkdownSnapshot(source).toc;
 }

@@ -49,7 +49,8 @@ function backendPlugin() {
 }
 
 export default defineConfig(({ mode }) => {
-  const isMacOSBuild = mode === 'macos';
+  const isMacOSBuild = mode === 'macos' || mode === 'contract-macos';
+  const isContractBuild = mode === 'contract-fnos' || mode === 'contract-macos';
 
   return {
     // macOS 通过 App 内的自定义 URL scheme 加载 Bundle 资源；相对路径让产物
@@ -62,7 +63,9 @@ export default defineConfig(({ mode }) => {
       format: 'es',
     },
     build: {
-      outDir: isMacOSBuild ? 'dist-macos' : 'dist',
+      outDir: isContractBuild
+        ? (isMacOSBuild ? 'dist-contract-macos' : 'dist-contract-fnos')
+        : (isMacOSBuild ? 'dist-macos' : 'dist'),
       emptyOutDir: true,
       // macOS 只打包渲染核心，不引入 fnOS 应用外壳和 API。
       rollupOptions: {

@@ -9,6 +9,7 @@ describe('macOS 渲染 bridge', () => {
   it('保留合法的 Swift 渲染载荷', () => {
     expect(
       normalizeRenderPayload({
+        generation: 'generation-1',
         content: '# 标题',
         title: 'guide.md',
         theme: 'dark',
@@ -18,6 +19,7 @@ describe('macOS 渲染 bridge', () => {
         activeFindMatch: 2,
       }),
     ).toEqual({
+      generation: 'generation-1',
       content: '# 标题',
       title: 'guide.md',
       theme: 'dark',
@@ -37,12 +39,14 @@ describe('macOS 渲染 bridge', () => {
 
   it('限制查找载荷长度并拒绝非法活动匹配序号', () => {
     const normalized = normalizeRenderPayload({
+      generation: 'x'.repeat(256),
       findQuery: 'x'.repeat(5_000),
       findCaseSensitive: 'true',
       activeFindMatch: -1,
     });
 
     expect(normalized.findQuery).toHaveLength(4_096);
+    expect(normalized.generation).toHaveLength(128);
     expect(normalized.findCaseSensitive).toBe(false);
     expect(normalized.activeFindMatch).toBe(0);
   });

@@ -177,6 +177,27 @@ test('PUT /api/file forwards the optimistic save contract and returns metadata',
     mtime: 11,
     ctime: 12,
     revision: 'b'.repeat(64),
+    saveOutcome: {
+      contractVersion: 1,
+      kind: 'committed',
+      snapshot: {
+        locator: '/volume/notes.md',
+        version: 'b'.repeat(64),
+        contentIncluded: false,
+        byteCount: 7,
+        capabilities: {
+          readable: true,
+          writable: true,
+          supportsCreate: false,
+          supportsSaveAs: false,
+        },
+        implementationSemantics: {
+          writeVisibility: 'recoverableInPlace',
+          recoveryLocation: 'private',
+        },
+      },
+      recoveryReferences: [],
+    },
   });
   assert.deepEqual(received.slice(0, 4), [
     '1000',
@@ -213,6 +234,12 @@ test('PUT /api/file exposes conflict revision without returning disk content', a
     error: 'FILE_CONFLICT',
     message: '文稿已被外部修改',
     currentRevision: 'c'.repeat(64),
+    saveOutcome: {
+      contractVersion: 1,
+      kind: 'rejected',
+      reason: 'conflict',
+      currentVersion: 'c'.repeat(64),
+    },
   });
 });
 
@@ -252,6 +279,16 @@ test('PUT recovery errors expose only opaque recovery metadata', async (t) => {
       available: true,
       recoveryId: 'e'.repeat(48),
       phase: 'recovery-required',
+    },
+    saveOutcome: {
+      contractVersion: 1,
+      kind: 'recoveryRequired',
+      commitState: 'unknown',
+      recoveryReferences: [{
+        kind: 'privateJournal',
+        reference: 'e'.repeat(48),
+        phase: 'recovery-required',
+      }],
     },
   });
   assert.doesNotMatch(response.body, /private\/secret/u);
@@ -464,6 +501,11 @@ test('decoded Markdown over 10MiB reaches business validation and returns FILE_T
   assert.deepEqual(JSON.parse(response.body), {
     error: 'FILE_TOO_LARGE',
     message: '文件过大，保存上限为 10 MiB',
+    saveOutcome: {
+      contractVersion: 1,
+      kind: 'rejected',
+      reason: 'tooLarge',
+    },
   });
 });
 

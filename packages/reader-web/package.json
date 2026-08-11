@@ -7,8 +7,12 @@
     "dev": "vite",
     "build": "vite build",
     "build:macos": "vite build --mode macos",
+    "build:contract:fnos": "vite build --mode contract-fnos",
+    "build:contract:macos": "vite build --mode contract-macos",
+    "benchmark:render": "node --expose-gc scripts/benchmark-render.mjs",
     "preview": "vite preview",
     "test": "vitest run --config vitest.config.js",
+    "test:contract:chromium": "npm run build:contract:fnos && npm run build:contract:macos && node scripts/test-render-contract-chromium.mjs",
     "test:watch": "vitest --config vitest.config.js"
   },
   "dependencies": {

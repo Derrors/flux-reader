@@ -103,10 +103,14 @@ final class ReaderViewModel: ObservableObject {
       scheduleDraftRecoveryPersistence()
       captureCurrentTab()
       scheduleDocumentSessionPersistence()
+      scheduleSplitPreviewUpdate()
     }
   }
+  @Published private(set) var splitPreviewContent = ""
   @Published private(set) var isEditing = false
-  @Published private(set) var isSplitView = false
+  @Published private(set) var isSplitView = false {
+    didSet { flushSplitPreviewContent() }
+  }
   @Published private(set) var documentTabs: [DocumentTab] = []
   @Published private(set) var activeTabID: URL?
   @Published var isTabCloseConfirmationPresented = false
@@ -125,6 +129,7 @@ final class ReaderViewModel: ObservableObject {
   @Published private(set) var isSaving = false
   @Published private(set) var saveStatusMessage: String?
   @Published private(set) var saveErrorMessage: String?
+  @Published private(set) var lastSaveOutcome: SafeSaveOutcome?
   @Published private(set) var draftRecoveryMessage: String?
   @Published private(set) var isDraftRecoverySyncing = false
   @Published private(set) var draftRecoveryCleanupErrorMessage: String?
@@ -180,6 +185,7 @@ final class ReaderViewModel: ObservableObject {
   private var pendingTabCloseID: URL?
   private var closesPendingTabAfterSave = false
   private var documentSessionTask: Task<Void, Never>?
+  private var splitPreviewTask: Task<Void, Never>?
   private var didAttemptSessionRestore = false
   private var findMatches: [NSRange] = []
 
@@ -211,7 +217,7 @@ final class ReaderViewModel: ObservableObject {
   }
 
   var previewDocument: MarkdownDocument? {
-    currentDocument?.withContent(draftContent)
+    currentDocument?.withContent(isSplitView ? splitPreviewContent : draftContent)
   }
 
   var hasUnsavedChanges: Bool {
@@ -476,6 +482,7 @@ final class ReaderViewModel: ObservableObject {
   }
 
   func save() {
+    flushSplitPreviewContent()
     guard
       let document = currentDocument,
       hasUnsavedChanges,
@@ -501,6 +508,7 @@ final class ReaderViewModel: ObservableObject {
   }
 
   func saveAs(to url: URL, for sourceDocumentURL: URL) {
+    flushSplitPreviewContent()
     guard
       let document = currentDocument,
       document.url.standardizedFileURL == sourceDocumentURL.standardizedFileURL
@@ -1365,6 +1373,33 @@ final class ReaderViewModel: ObservableObject {
     }
   }
 
+  private func scheduleSplitPreviewUpdate() {
+    splitPreviewTask?.cancel()
+    guard isSplitView else {
+      splitPreviewContent = draftContent
+      return
+    }
+
+    let latestContent = draftContent
+    splitPreviewTask = Task { [weak self] in
+      do {
+        try await Task.sleep(for: .milliseconds(120))
+        try Task.checkCancellation()
+        guard let self, self.isSplitView, self.draftContent == latestContent else { return }
+        self.splitPreviewContent = latestContent
+        self.splitPreviewTask = nil
+      } catch {
+        return
+      }
+    }
+  }
+
+  private func flushSplitPreviewContent() {
+    splitPreviewTask?.cancel()
+    splitPreviewTask = nil
+    splitPreviewContent = draftContent
+  }
+
   private func scheduleDraftRecoveryClear(generation: UInt64? = nil) {
     draftRecoveryTask?.cancel()
     let expectedGeneration = generation ?? draftRecoveryPersistence.advanceGeneration()
@@ -1625,6 +1660,7 @@ final class ReaderViewModel: ObservableObject {
     saveOperationID = operationID
     isSaving = true
     saveErrorMessage = nil
+    lastSaveOutcome = nil
     saveStatusMessage = "正在准备保存…"
 
     saveTask = Task { [weak self] in
@@ -1677,6 +1713,10 @@ final class ReaderViewModel: ObservableObject {
         self.currentRetainedRecoveryVersionID = nil
         self.currentDocumentAccess = savedAccess
         self.phase = .loaded(savedWithResourceRoot)
+        self.lastSaveOutcome = SafeSaveContract.committed(
+          document: savedWithResourceRoot,
+          locator: savedURL.absoluteString
+        )
         if savedURL != sourceURL {
           self.openDocumentTabs.removeValue(forKey: sourceURL)
           self.restoredSessionRecords.removeValue(forKey: sourceURL)
@@ -1730,6 +1770,7 @@ final class ReaderViewModel: ObservableObject {
         saveOperationID = nil
         saveTask = nil
         saveStatusMessage = nil
+        lastSaveOutcome = SafeSaveContract.failed(error: error)
         saveErrorMessage = error.localizedDescription
         refreshRetainedRecoveryVersions()
         if opensPendingDocumentAfterSave {

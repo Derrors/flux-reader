@@ -1,0 +1,136 @@
+{
+  "$schema": "./schema.json#/$defs/scenarioCorpus",
+  "contractVersion": 1,
+  "scenarios": [
+    {
+      "id": "normal-update",
+      "description": "当前版本上的普通更新提交并返回新版本。",
+      "intent": "update",
+      "precondition": "目标是可写普通文件且 baseVersion 与磁盘一致。",
+      "event": "保存新正文。",
+      "expected": { "kind": "committed", "disk": "newContent" },
+      "platformSignals": { "fnos": "COMMITTED", "macos": "COMMITTED" },
+      "evidence": { "fnos": "file-access-write.test.js normal save", "macos": "LocalFileServiceTests.swift atomic save" }
+    },
+    {
+      "id": "same-content-no-op",
+      "description": "相同正文的保存仍返回当前有效版本且不破坏目标。",
+      "intent": "update",
+      "precondition": "baseVersion 与磁盘一致且请求正文等于磁盘正文。",
+      "event": "执行 no-op 保存。",
+      "expected": { "kind": "committed", "disk": "originalContent" },
+      "platformSignals": { "fnos": "COMMITTED", "macos": "COMMITTED" },
+      "evidence": { "fnos": "file-access-write.test.js no-op save", "macos": "LocalFileServiceTests.swift unchanged content" }
+    },
+    {
+      "id": "stale-base-version",
+      "description": "过期版本不得覆盖磁盘当前正文。",
+      "intent": "update",
+      "precondition": "baseVersion 早于磁盘版本。",
+      "event": "尝试保存草稿。",
+      "expected": { "kind": "rejected", "reason": "conflict", "disk": "externalContent" },
+      "platformSignals": { "fnos": "FILE_CONFLICT", "macos": "fileModifiedExternally" },
+      "evidence": { "fnos": "file-access-write.test.js stale revision", "macos": "LocalFileServiceTests.swift rejects external modification" }
+    },
+    {
+      "id": "same-size-and-time-content-change",
+      "description": "相同大小与时间戳的正文变化也必须被识别为冲突。",
+      "intent": "update",
+      "precondition": "外部正文已变化，但大小和修改时间被保持。",
+      "event": "使用旧正文基线保存。",
+      "expected": { "kind": "rejected", "reason": "conflict", "disk": "externalContent" },
+      "platformSignals": { "fnos": "FILE_CONFLICT", "macos": "fileModifiedExternally" },
+      "evidence": { "fnos": "file-access-write.test.js revision includes precise identity", "macos": "LocalFileServiceTests.swift compares expected content" }
+    },
+    {
+      "id": "target-replaced-before-commit",
+      "description": "最终校验前目标被替换、删除或变为非普通文件时 fail closed。",
+      "intent": "update",
+      "precondition": "初次校验通过。",
+      "event": "外部进程在 commit 前替换目标。",
+      "expected": { "kind": "rejected", "reason": "conflict", "disk": "externalContent" },
+      "platformSignals": { "fnos": "PATH_CHANGED_DURING_SAVE", "macos": "fileModifiedExternally" },
+      "evidence": { "fnos": "file-access-security.test.js path replacement", "macos": "LocalFileServiceTests.swift replacement race" }
+    },
+    {
+      "id": "permission-revoked-before-commit",
+      "description": "权限在初次校验后撤销时不得无保护地修改目标。",
+      "intent": "update",
+      "precondition": "初次授权通过。",
+      "event": "commit 屏障前写权限被撤销。",
+      "expected": { "kind": "rejected", "reason": "permission", "disk": "originalContent" },
+      "platformSignals": { "fnos": "USER_ACL_WRITE_DENIED", "macos": "permissionDenied" },
+      "evidence": { "fnos": "file-access-write.test.js second ACL pass", "macos": "LocalFileServiceTests.swift coordinated write permission failure" }
+    },
+    {
+      "id": "concurrent-same-base",
+      "description": "两个相同 baseVersion 的并发保存只能有一个提交。",
+      "intent": "update",
+      "precondition": "两个请求读取同一版本。",
+      "event": "并发提交不同正文。",
+      "expected": { "kind": "rejected", "reason": "conflict", "disk": "newContent" },
+      "platformSignals": { "fnos": "FILE_CONFLICT", "macos": "fileModifiedExternally" },
+      "evidence": { "fnos": "file-access-write.test.js concurrent writers", "macos": "LocalFileServiceTests.swift coordinated competing saves" }
+    },
+    {
+      "id": "late-external-writer",
+      "description": "外部文件描述符晚到写入不得被自动回滚覆盖。",
+      "intent": "update",
+      "precondition": "外部 writer 已持有目标引用。",
+      "event": "发布后外部 writer 写入。",
+      "expected": { "kind": "rejected", "reason": "conflict", "disk": "externalContent" },
+      "platformSignals": { "fnos": "FILE_CONFLICT", "macos": "fileModifiedExternally" },
+      "evidence": { "fnos": "file-access-write.test.js late writer", "macos": "LocalFileServiceTests.swift swap race" }
+    },
+    {
+      "id": "failure-before-mutation",
+      "description": "首次 mutation 前失败是普通拒绝并保持原正文。",
+      "intent": "update",
+      "precondition": "durable baseline 尚未完成或存储暂不可用。",
+      "event": "在首次 mutation 前注入失败。",
+      "expected": { "kind": "rejected", "reason": "unavailable", "disk": "originalContent" },
+      "platformSignals": { "fnos": "STORAGE_WRITE_UNAVAILABLE", "macos": "unavailable" },
+      "evidence": { "fnos": "file-access-write.test.js pre-truncate failure", "macos": "LocalFileServiceTests.swift pre-commit failure" }
+    },
+    {
+      "id": "failure-after-mutation",
+      "description": "mutation 后无法证明最终状态时必须要求恢复。",
+      "intent": "update",
+      "precondition": "durable baseline 已建立且 mutation 已开始。",
+      "event": "写入或发布后注入失败。",
+      "expected": { "kind": "recoveryRequired", "commitState": "unknown", "disk": "explicitRecovery" },
+      "platformSignals": { "fnos": "SAVE_RECOVERY_REQUIRED", "macos": "saveRecoveryRequired" },
+      "evidence": { "fnos": "file-access-write.test.js post-truncate failure", "macos": "LocalFileServiceTests.swift retained recovery sidecar" }
+    },
+    {
+      "id": "recovery-quota-full",
+      "description": "恢复配额不足时在 mutation 前 fail closed。",
+      "intent": "update",
+      "precondition": "恢复目录达到保留或容量配额。",
+      "event": "尝试建立 durable baseline。",
+      "expected": { "kind": "rejected", "reason": "resourceExhausted", "disk": "originalContent" },
+      "platformSignals": { "fnos": "RECOVERY_QUOTA_EXCEEDED", "macos": "resourceExhausted" },
+      "evidence": { "fnos": "file-access-write.test.js recovery quotas", "macos": "LocalFileServiceTests.swift sidecar creation failure" }
+    },
+    {
+      "id": "invalid-input-or-target",
+      "description": "超限、无效 UTF-8 和符号链接目标使用稳定的结构化拒绝分类。",
+      "intent": "update",
+      "precondition": "请求或目标违反保存输入约束。",
+      "event": "在 mutation 前校验。",
+      "expected": { "kind": "rejected", "reason": "invalidTarget", "disk": "originalContent" },
+      "platformSignals": { "fnos": "SYMLINK_SAVE_DENIED", "macos": "notRegularFile" },
+      "evidence": { "fnos": "file-access-write.test.js size/UTF-8/symlink cases", "macos": "LocalFileServiceTests.swift size/UTF-8/type cases" }
+    },
+    {
+      "id": "create-target-race",
+      "description": "create/saveAs 目标在确认后被创建时不得覆盖竞争者内容。",
+      "intent": "saveAs",
+      "precondition": "初次观察目标不存在。",
+      "event": "外部进程在 commit 前创建目标。",
+      "expected": { "kind": "rejected", "reason": "conflict", "disk": "externalContent" },
+      "platformSignals": { "fnos": "FILE_CONFLICT", "macos": "fileModifiedExternally" },
+      "evidence": { "fnos": "save contract maps create races to conflict", "macos": "LocalFileServiceTests.swift expectedTargetExists false race" }
+    }
+  ]
+}

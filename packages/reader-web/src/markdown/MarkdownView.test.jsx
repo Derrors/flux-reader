@@ -68,4 +68,29 @@ describe('MarkdownView 文档内查找', () => {
     expect(container.querySelectorAll('mark.markdown-find-match')).toHaveLength(1);
     expect(onMatchCountChange).toHaveBeenLastCalledWith(1);
   });
+
+  it('切换活动匹配只移动 class，不重建已解析 DOM', () => {
+    const { container, rerender } = render(
+      <MarkdownView
+        content="needle needle"
+        findQuery="needle"
+        activeFindMatch={0}
+      />,
+    );
+    const firstBefore = container.querySelector('[data-find-match="0"]');
+    const secondBefore = container.querySelector('[data-find-match="1"]');
+
+    rerender(
+      <MarkdownView
+        content="needle needle"
+        findQuery="needle"
+        activeFindMatch={1}
+      />,
+    );
+
+    expect(container.querySelector('[data-find-match="0"]')).toBe(firstBefore);
+    expect(container.querySelector('[data-find-match="1"]')).toBe(secondBefore);
+    expect(firstBefore).not.toHaveClass('is-active');
+    expect(secondBefore).toHaveClass('is-active');
+  });
 });

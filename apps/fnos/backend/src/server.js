@@ -14,6 +14,10 @@ const express = require('express');
 
 const trimApi = require('./trim-api');
 const fileAccess = require('./file-access');
+const {
+  committedSaveOutcome,
+  failedSaveOutcome,
+} = require('./safe-save-contract');
 
 const APP_NAME = process.env.TRIM_APPNAME || 'flux-reader';
 const BASE_PATH = `/app/${APP_NAME}`;
@@ -167,15 +171,20 @@ api.put('/file', requireUser, async (req, res) => {
       { signal: requestLifetime.signal },
     );
     res.set('Cache-Control', 'private, no-store');
-    res.json(result);
+    res.json({
+      ...result,
+      saveOutcome: committedSaveOutcome(result, { locator: documentPath }),
+    });
   } catch (err) {
     if (err.name === 'AbortError' && requestLifetime.signal.aborted) return;
+    const recovery = publicRecoveryInfo(err.recovery);
     res.status(err.status || 500).json({
       error: err.reason || 'SAVE_FAILED',
       message: err.message,
       ...(err.currentRevision ? { currentRevision: err.currentRevision } : {}),
       ...(err.recoveryRequired ? { recoveryRequired: true } : {}),
-      ...(err.recovery ? { recovery: publicRecoveryInfo(err.recovery) } : {}),
+      ...(recovery ? { recovery } : {}),
+      saveOutcome: failedSaveOutcome(err, { publicRecovery: recovery }),
     });
   } finally {
     requestLifetime.cleanup();
@@ -241,15 +250,20 @@ api.post('/file-recovery/commit', requireUser, async (req, res) => {
       { signal: requestLifetime.signal },
     );
     res.set('Cache-Control', 'private, no-store');
-    res.json(result);
+    res.json({
+      ...result,
+      saveOutcome: committedSaveOutcome(result, { locator: documentPath }),
+    });
   } catch (err) {
     if (err.name === 'AbortError' && requestLifetime.signal.aborted) return;
+    const recovery = publicRecoveryInfo(err.recovery);
     res.status(err.status || 500).json({
       error: err.reason || 'RECOVERY_COMMIT_FAILED',
       message: err.message,
       ...(err.currentRevision ? { currentRevision: err.currentRevision } : {}),
       ...(err.recoveryRequired ? { recoveryRequired: true } : {}),
-      ...(err.recovery ? { recovery: publicRecoveryInfo(err.recovery) } : {}),
+      ...(recovery ? { recovery } : {}),
+      saveOutcome: failedSaveOutcome(err, { publicRecovery: recovery }),
     });
   } finally {
     requestLifetime.cleanup();
