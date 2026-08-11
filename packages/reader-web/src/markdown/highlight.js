@@ -11,8 +11,8 @@ let seq = 0;
 const pending = new Map();
 
 /** 超大代码块不做高亮，直接降级纯文本（性能保护） */
-export const HUGE_CODE_THRESHOLD = 50_000;
-export const HUGE_LINE_THRESHOLD = 2_000;
+export const HUGE_CODE_THRESHOLD = 100_000;
+export const HUGE_LINE_THRESHOLD = 4_000;
 
 export function isHugeCode(code) {
   return (

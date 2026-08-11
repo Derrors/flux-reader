@@ -53,6 +53,33 @@ final class LocalFileServiceTests: XCTestCase {
     }
   }
 
+  func testProductionLimitsSupportTenMiBDocumentsAndRecovery() {
+    let tenMiB = 10 * 1_024 * 1_024
+
+    XCTAssertEqual(LocalFileService.defaultMaximumFileSize, tenMiB)
+    XCTAssertGreaterThan(LocalDraftRecoveryStore.maximumRecordSize, tenMiB)
+    XCTAssertGreaterThanOrEqual(
+      LocalDocumentSessionStore.maximumRecordSize,
+      tenMiB * DocumentSessionRecord.maximumTabCount
+    )
+  }
+
+  func testProductionLimitAcceptsTenMiBAndRejectsTheNextByte() throws {
+    let url = temporaryDirectory.appendingPathComponent("boundary.md")
+    let limit = LocalFileService.defaultMaximumFileSize
+    try Data(repeating: 65, count: limit).write(to: url)
+
+    XCTAssertEqual(try LocalFileService().loadDocument(at: url).byteCount, limit)
+
+    try Data(repeating: 65, count: limit + 1).write(to: url)
+    XCTAssertThrowsError(try LocalFileService().loadDocument(at: url)) { error in
+      XCTAssertEqual(
+        error as? FileAccessError,
+        .fileTooLarge(actual: limit + 1, limit: limit)
+      )
+    }
+  }
+
   func testRejectsInvalidUTF8() throws {
     let url = temporaryDirectory.appendingPathComponent("invalid.md")
     try Data([0xC3, 0x28]).write(to: url)

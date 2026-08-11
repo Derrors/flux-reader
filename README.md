@@ -46,7 +46,7 @@ Flux Reader 不只是渲染 Markdown。它可以管理文件夹、搜索文稿�
 | 文件变化 | 自动轮询更新 | FSEvents 自动更新 |
 | 访问控制 | fnOS 应用授权 + 当前用户 ACL | App Sandbox + Security-scoped bookmarks |
 
-支持 `.md`、`.markdown` 和 `.mdx` 文件；单份可编辑文稿上限为 2 MB，文本编码需要为 UTF-8。
+支持 `.md`、`.markdown` 和 `.mdx` 文件；单份可编辑文稿上限为 10 MiB，文本编码需要为 UTF-8。
 
 ## 安装
 

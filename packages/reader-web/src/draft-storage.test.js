@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  MAX_DRAFT_CHARACTERS,
   draftStorageKey,
   readDraft,
   removeDraft,
@@ -52,7 +53,9 @@ describe('fnOS 崩溃恢复草稿', () => {
     expect(readDraft('1000', '/volume/docs/a.md')).toBeNull();
 
     window.localStorage.setItem(key, JSON.stringify({
-      actualPath: '/volume/docs/a.md', content: 'x'.repeat(2_500_001), updatedAt: Date.now(),
+      actualPath: '/volume/docs/a.md',
+      content: 'x'.repeat(MAX_DRAFT_CHARACTERS + 1),
+      updatedAt: Date.now(),
     }));
     expect(readDraft('1000', '/volume/docs/a.md')).toBeNull();
   });

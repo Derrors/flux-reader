@@ -5,6 +5,7 @@ import App from './App';
 import { writeDocumentSession } from './document-session';
 import { recentStorageKey, writeRecentDocuments } from './recent-documents';
 import { draftStorageKey, readDraft, writeDraft } from './draft-storage';
+import { MAX_EDITABLE_DOCUMENT_BYTES, MAX_EDITABLE_DOCUMENT_MIB } from './limits';
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -1958,16 +1959,16 @@ describe('App fnOS 编辑、保存与恢复', () => {
     expect(await screen.findByTestId('markdown-view')).toHaveTextContent('保存前的完整正文');
   });
 
-  it('当前 inode 超过 2 MiB 时仍可通过轻量 metadata 与专用 commit 恢复', async () => {
+  it('当前 inode 超过 10 MiB 时仍可通过轻量 metadata 与专用 commit 恢复', async () => {
     const recoveryId = '5'.repeat(48);
     const user = await renderReady();
     mocks.trim.pickMarkdownFile.mockResolvedValueOnce('/share/oversized.md');
     mocks.api.file.mockRejectedValueOnce(
-      httpError('文件超过 2 MiB 阅读上限', 413, 'FILE_TOO_LARGE'),
+      httpError('文件超过 10 MiB 阅读上限', 413, 'FILE_TOO_LARGE'),
     );
     mocks.api.fileState.mockResolvedValueOnce({
       actualPath: '/share/oversized.md',
-      size: 2 * 1024 * 1024 + 1,
+      size: MAX_EDITABLE_DOCUMENT_BYTES + 1,
       mtime: 2,
       ctime: 2,
       revision: 'b'.repeat(64),
@@ -1986,7 +1987,7 @@ describe('App fnOS 编辑、保存与恢复', () => {
     // 用户点击恢复时必须重新取得当前 inode 的 revision，绝不复用日志 revision。
     mocks.api.fileState.mockResolvedValueOnce({
       actualPath: '/share/oversized.md',
-      size: 2 * 1024 * 1024 + 1,
+      size: MAX_EDITABLE_DOCUMENT_BYTES + 1,
       mtime: 3,
       ctime: 3,
       revision: 'c'.repeat(64),
@@ -2025,27 +2026,27 @@ describe('App fnOS 编辑、保存与恢复', () => {
     expect(await screen.findByTestId('markdown-view')).toHaveTextContent('日志中的可恢复正文');
   });
 
-  it('commit 后磁盘仍超过 2 MiB 时保留本地草稿恢复入口并允许继续编辑', async () => {
+  it('commit 后磁盘仍超过 10 MiB 时保留本地草稿恢复入口并允许继续编辑', async () => {
     const recoveryId = '0'.repeat(48);
     const path = '/share/oversized-with-draft.md';
-    const localDraft = '小于 2 MiB、仍可继续编辑的本地草稿';
+    const localDraft = '小于 10 MiB、仍可继续编辑的本地草稿';
     mocks.api.env.mockResolvedValue({ openApiAvailable: true, uid: 'user-a' });
     writeDraft('user-a', path, localDraft, '9'.repeat(64));
     const user = await renderReady();
     mocks.trim.pickMarkdownFile.mockResolvedValueOnce(path);
     mocks.api.file
-      .mockRejectedValueOnce(httpError('文件超过 2 MiB 阅读上限', 413, 'FILE_TOO_LARGE'))
-      .mockRejectedValueOnce(httpError('恢复版本仍超过 2 MiB', 413, 'FILE_TOO_LARGE'));
+      .mockRejectedValueOnce(httpError('文件超过 10 MiB 阅读上限', 413, 'FILE_TOO_LARGE'))
+      .mockRejectedValueOnce(httpError('恢复版本仍超过 10 MiB', 413, 'FILE_TOO_LARGE'));
     mocks.api.fileState
       .mockResolvedValueOnce({
         actualPath: path,
-        size: 2 * 1024 * 1024 + 1,
+        size: MAX_EDITABLE_DOCUMENT_BYTES + 1,
         revision: 'a'.repeat(64),
         writable: true,
       })
       .mockResolvedValueOnce({
         actualPath: path,
-        size: 2 * 1024 * 1024 + 1,
+        size: MAX_EDITABLE_DOCUMENT_BYTES + 1,
         revision: 'b'.repeat(64),
         writable: true,
       });
@@ -2061,7 +2062,7 @@ describe('App fnOS 编辑、保存与恢复', () => {
     });
     mocks.api.commitRecovery.mockResolvedValueOnce({
       actualPath: path,
-      size: 2 * 1024 * 1024 + 1,
+      size: MAX_EDITABLE_DOCUMENT_BYTES + 1,
       revision: 'c'.repeat(64),
       writable: true,
     });
@@ -2071,7 +2072,7 @@ describe('App fnOS 编辑、保存与恢复', () => {
     await user.click(within(serverDialog).getByRole('button', { name: '恢复待保存版本' }));
 
     const localDialog = await screen.findByRole('dialog', { name: '发现未保存草稿' });
-    expect(localDialog).toHaveTextContent('磁盘正文不可预览：恢复版本仍超过 2 MiB');
+    expect(localDialog).toHaveTextContent('磁盘正文不可预览：恢复版本仍超过 10 MiB');
     expect(readDraft('user-a', path)).toMatchObject({
       content: localDraft,
       sourceRevision: 'c'.repeat(64),
@@ -2330,12 +2331,15 @@ describe('App fnOS 编辑、保存与恢复', () => {
   it('保存上限按 UTF-8 字节计算而不是 JavaScript 字符数', async () => {
     const user = await renderReady();
     const editor = await openEditableFile(user);
-    fireEvent.change(editor, { target: { value: '你'.repeat(700_000) } });
+    const oversizedContent = '你'.repeat(Math.floor(MAX_EDITABLE_DOCUMENT_BYTES / 3) + 1);
+    fireEvent.change(editor, { target: { value: oversizedContent } });
     await user.click(screen.getByRole('button', { name: '保存' }));
 
-    expect(await screen.findByText(/超过 2 MB 保存上限/)).toBeVisible();
+    expect(
+      await screen.findByText(new RegExp(`超过 ${MAX_EDITABLE_DOCUMENT_MIB} MiB 保存上限`)),
+    ).toBeVisible();
     expect(mocks.api.saveFile).not.toHaveBeenCalled();
-    expect(editor).toHaveValue('你'.repeat(700_000));
+    expect(editor).toHaveValue(oversizedContent);
   });
 
   it('在编辑器中查找、替换当前项和全部匹配，并更新未保存标记', async () => {

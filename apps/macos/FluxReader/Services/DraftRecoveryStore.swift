@@ -92,7 +92,9 @@ protocol DraftRecoveryStoring: Sendable {
 }
 
 struct LocalDraftRecoveryStore: DraftRecoveryStoring {
-  static let maximumRecordSize = 5 * 1_024 * 1_024
+  // JSON may escape control characters, so keep headroom above the 10 MiB
+  // editable document limit instead of sizing this record to raw text alone.
+  static let maximumRecordSize = 64 * 1_024 * 1_024
 
   let fileURL: URL
 
@@ -332,7 +334,8 @@ protocol DocumentSessionStoring: Sendable {
 }
 
 struct LocalDocumentSessionStore: DocumentSessionStoring {
-  static let maximumRecordSize = 28 * 1_024 * 1_024
+  // A restored session may contain unsaved drafts for all twelve tabs.
+  static let maximumRecordSize = 160 * 1_024 * 1_024
 
   let fileURL: URL
 

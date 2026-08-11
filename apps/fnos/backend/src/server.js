@@ -220,7 +220,7 @@ api.get('/file-recovery', requireUser, async (req, res) => {
 });
 
 /**
- * 在服务端提交私有恢复版本。正文不经过 JSON，也不放宽普通编辑的 2 MiB
+ * 在服务端提交私有恢复版本。正文不经过 JSON，也不放宽普通编辑的 10 MiB
  * 上限；后端以 fresh expectedRevision 做同一套 ACL/path/inode CAS 与 journal。
  */
 api.post('/file-recovery/commit', requireUser, async (req, res) => {
@@ -412,7 +412,7 @@ app.use((err, _req, res, next) => {
   if (err?.type === 'entity.too.large') {
     return res.status(413).json({
       error: 'REQUEST_TOO_LARGE',
-      message: `请求体过大，Markdown 内容上限为 ${fileAccess.MAX_FILE_BYTES / 1024 / 1024} MB`,
+      message: `请求体过大，Markdown 内容上限为 ${fileAccess.MAX_FILE_BYTES / 1024 / 1024} MiB`,
     });
   }
   if (err instanceof SyntaxError && err?.status === 400 && 'body' in err) {

@@ -47,7 +47,7 @@ a live preview, and protect your work across tabs, restarts, and save conflicts.
 | Access control | fnOS app authorization + current-user ACL | App Sandbox + security-scoped bookmarks |
 
 Flux Reader supports `.md`, `.markdown`, and `.mdx`. Editable documents must be valid UTF-8 and no larger
-than 2 MB.
+than 10 MiB.
 
 ## Installation
 

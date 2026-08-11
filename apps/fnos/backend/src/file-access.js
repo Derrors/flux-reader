@@ -17,9 +17,9 @@ const trimApi = require('./trim-api');
 
 const MD_EXTENSIONS = new Set(['.md', '.markdown', '.mdx']);
 /** 单文件读取上限，防止把 NAS 内存吃满 */
-const MAX_FILE_BYTES = 2 * 1024 * 1024; // 2 MB
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MiB
 /** 本地图片读取上限；与 macOS 端保持一致。 */
-const MAX_IMAGE_BYTES = 25 * 1024 * 1024; // 25 MB
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024; // 25 MiB
 const IMAGE_MIME_TYPES = new Map([
   ['.avif', 'image/avif'],
   ['.bmp', 'image/bmp'],
@@ -44,7 +44,7 @@ const MAX_SEARCH_CONTENT_BYTES = 64 * 1024 * 1024;
 const MAX_SEARCH_CONTENT_FILES = 1000;
 /**
  * JSON 控制字符最坏会以 \uXXXX 扩为 6 倍；请求层只防资源耗尽，真正的
- * Markdown 上限仍在解码后按 UTF-8 字节严格检查 2 MiB。
+ * Markdown 上限仍在解码后按 UTF-8 字节严格检查 10 MiB。
  */
 const MAX_SAVE_REQUEST_BYTES = MAX_FILE_BYTES * 6 + 64 * 1024;
 /** 避免单次 ACL 请求包含过多路径 */
@@ -63,9 +63,9 @@ const MAX_RECOVERY_MANIFEST_BYTES = 64 * 1024;
 const RECOVERY_MANIFEST_NAME = /^manifest-([a-f0-9]{48})\.json$/u;
 /**
  * 恢复提交允许处理的单个 baseline / attempted / observed 硬上限。
- * 新的 Markdown 编辑正文仍由 MAX_FILE_BYTES 严格限制为 2 MiB。
+ * 新的 Markdown 编辑正文仍由 MAX_FILE_BYTES 严格限制为 10 MiB。
  */
-const MAX_RECOVERY_BASELINE_BYTES = 8 * 1024 * 1024;
+const MAX_RECOVERY_BASELINE_BYTES = 16 * 1024 * 1024;
 const MAX_RECOVERY_ARTIFACTS_PER_TRANSACTION = 3;
 const MAX_RECOVERY_MANIFEST_RESERVATIONS_PER_TRANSACTION = 4;
 const MAX_RECOVERY_TRANSACTION_BYTES =
@@ -76,7 +76,7 @@ const MAX_RECOVERY_TRANSACTIONS_PER_TARGET = 8;
 const MAX_RECOVERY_TRANSACTIONS_PER_UID = 32;
 const MAX_RECOVERY_TRANSACTIONS_GLOBAL = 128;
 /**
- * 一个事务最坏保留 3 个 8 MiB 工件与 4 份 manifest 预留。单目标
+ * 一个事务最坏保留 3 个 16 MiB 工件与 4 份 manifest 预留。单目标
  * 允许两个最坏事务同时存在，所以最大恢复记录仍能安全重试一次；
  * uid/global 继续按固定倍数封顶，避免恢复空间无界增长。
  */
@@ -965,7 +965,7 @@ async function readMarkdown(uid, targetPath, { signal } = {}) {
       const { stat } = opened;
       if (stat.size > MAX_FILE_BYTES) {
         throw securityError(
-          `文件过大（${(stat.size / 1024 / 1024).toFixed(1)} MB），阅读器上限为 ${MAX_FILE_BYTES / 1024 / 1024} MB`,
+          `文件过大（${(stat.size / 1024 / 1024).toFixed(1)} MiB），阅读器上限为 ${MAX_FILE_BYTES / 1024 / 1024} MiB`,
           'FILE_TOO_LARGE',
           413,
         );
@@ -1074,7 +1074,7 @@ function assertValidSaveRequest(targetPath, content, expectedRevision) {
   const data = Buffer.from(content, 'utf8');
   if (data.length > MAX_FILE_BYTES) {
     throw securityError(
-      `文件过大，保存上限为 ${MAX_FILE_BYTES / 1024 / 1024} MB`,
+      `文件过大，保存上限为 ${MAX_FILE_BYTES / 1024 / 1024} MiB`,
       'FILE_TOO_LARGE',
       413,
     );

@@ -420,7 +420,7 @@ test('recovery commit fails closed when the current baseline exceeds the recover
   );
 });
 
-test('JSON limit accepts a near-2MiB Markdown body even when escaping doubles it', async (t) => {
+test('JSON limit accepts a near-10MiB Markdown body even when escaping doubles it', async (t) => {
   const original = fileAccess.writeMarkdown;
   let decodedBytes = 0;
   fileAccess.writeMarkdown = async (_uid, documentPath, content) => {
@@ -451,7 +451,7 @@ test('JSON limit accepts a near-2MiB Markdown body even when escaping doubles it
   assert.equal(decodedBytes, fileAccess.MAX_FILE_BYTES - 128);
 });
 
-test('decoded Markdown over 2MiB reaches business validation and returns FILE_TOO_LARGE', async () => {
+test('decoded Markdown over 10MiB reaches business validation and returns FILE_TOO_LARGE', async () => {
   const response = await request(
     JSON.stringify({
       path: '/volume/notes.md',
@@ -463,7 +463,7 @@ test('decoded Markdown over 2MiB reaches business validation and returns FILE_TO
   assert.equal(response.status, 413);
   assert.deepEqual(JSON.parse(response.body), {
     error: 'FILE_TOO_LARGE',
-    message: '文件过大，保存上限为 2 MB',
+    message: '文件过大，保存上限为 10 MiB',
   });
 });
 
@@ -479,6 +479,6 @@ test('JSON parser rejects oversized save requests with a machine-readable error'
   assert.equal(response.status, 413);
   assert.deepEqual(JSON.parse(response.body), {
     error: 'REQUEST_TOO_LARGE',
-    message: '请求体过大，Markdown 内容上限为 2 MB',
+    message: '请求体过大，Markdown 内容上限为 10 MiB',
   });
 });

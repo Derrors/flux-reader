@@ -19,13 +19,16 @@ import {
   readDocumentSession,
   writeDocumentSession,
 } from './document-session';
+import {
+  MAX_EDITABLE_DOCUMENT_BYTES,
+  MAX_EDITABLE_DOCUMENT_MIB,
+} from './limits';
 
 const MAX_WORKSPACES = 8;
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const FOCUS_REFRESH_DELAY_MS = 150;
 const SEARCH_DELAY_MS = 250;
 const DRAFT_PERSIST_DELAY_MS = 500;
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MARKDOWN_PATH = /\.(?:md|markdown|mdx)$/i;
 
 /** Read an absolute Markdown path supplied by the fnOS file association. */
@@ -684,8 +687,11 @@ export default function App() {
       return Promise.resolve(false);
     }
     const contentBytes = new TextEncoder().encode(snapshotContent).byteLength;
-    if (contentBytes > MAX_FILE_BYTES) {
-      setError(`文稿为 ${(contentBytes / 1024 / 1024).toFixed(1)} MB，超过 2 MB 保存上限`);
+    if (contentBytes > MAX_EDITABLE_DOCUMENT_BYTES) {
+      setError(
+        `文稿为 ${(contentBytes / 1024 / 1024).toFixed(1)} MiB，` +
+        `超过 ${MAX_EDITABLE_DOCUMENT_MIB} MiB 保存上限`,
+      );
       return Promise.resolve(false);
     }
     const requestSeq = documentRequestSeqRef.current;

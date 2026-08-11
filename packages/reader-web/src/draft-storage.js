@@ -1,5 +1,9 @@
+import { MAX_EDITABLE_DOCUMENT_BYTES } from './limits';
+
 const DRAFT_STORAGE_PREFIX = 'flux-reader:draft:v1';
-const MAX_DRAFT_CHARACTERS = 2_500_000;
+// JavaScript 字符数不会大于同一内容的 UTF-8 字节数，因此这个上限能容纳
+// 所有满足可编辑文稿字节限制的草稿，同时避免异常存储值无限膨胀。
+export const MAX_DRAFT_CHARACTERS = MAX_EDITABLE_DOCUMENT_BYTES;
 
 function storage() {
   try {

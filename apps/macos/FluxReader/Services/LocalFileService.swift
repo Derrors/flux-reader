@@ -43,7 +43,7 @@ enum FileAccessError: LocalizedError, Equatable, Sendable {
 }
 
 struct LocalFileService: FileAccessing {
-  static let defaultMaximumFileSize = 2 * 1_024 * 1_024
+  static let defaultMaximumFileSize = 10 * 1_024 * 1_024
 
   let maximumFileSize: Int
   private let postWriteModificationDateProvider: @Sendable (URL) throws -> Date?
