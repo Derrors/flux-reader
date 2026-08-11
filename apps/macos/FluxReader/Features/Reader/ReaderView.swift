@@ -5,8 +5,7 @@ import UniformTypeIdentifiers
 struct ReaderView: View {
   @ObservedObject var viewModel: ReaderViewModel
   @Binding var appearance: AppAppearance
-  @State private var editorScrollFraction = 0.0
-  @State private var previewScrollFraction = 0.0
+  @StateObject private var splitScrollSynchronizer = SplitScrollSynchronizer()
 
   var body: some View {
     NavigationSplitView {
@@ -219,8 +218,7 @@ struct ReaderView: View {
       prompt: "搜索文件名和正文"
     )
     .onChange(of: viewModel.activeTabID) { _, _ in
-      editorScrollFraction = 0
-      previewScrollFraction = 0
+      splitScrollSynchronizer.resetPositions()
     }
   }
 
@@ -593,8 +591,7 @@ struct ReaderView: View {
               isSaving: viewModel.isSaving,
               statusMessage: viewModel.saveStatusMessage,
               selectedRange: viewModel.activeFindRange,
-              targetScrollFraction: previewScrollFraction,
-              onScrollFractionChange: { editorScrollFraction = $0 }
+              scrollSynchronizer: splitScrollSynchronizer
             )
             .frame(minWidth: 280)
 
@@ -603,8 +600,7 @@ struct ReaderView: View {
               findQuery: viewModel.isFindPresented ? viewModel.findQuery : "",
               findCaseSensitive: viewModel.findCaseSensitive,
               activeFindMatch: viewModel.activeFindMatchIndex,
-              targetScrollFraction: editorScrollFraction,
-              onScrollFractionChange: { previewScrollFraction = $0 }
+              scrollSynchronizer: splitScrollSynchronizer
             )
             .frame(minWidth: 280)
           }
@@ -865,16 +861,14 @@ private struct MarkdownEditorView: View {
   let isSaving: Bool
   let statusMessage: String?
   var selectedRange: NSRange? = nil
-  var targetScrollFraction: Double? = nil
-  var onScrollFractionChange: (Double) -> Void = { _ in }
+  var scrollSynchronizer: SplitScrollSynchronizer? = nil
 
   var body: some View {
     VStack(spacing: 0) {
       MarkdownTextView(
         text: $content,
         selectedRange: selectedRange,
-        targetScrollFraction: targetScrollFraction,
-        onScrollFractionChange: onScrollFractionChange
+        scrollSynchronizer: scrollSynchronizer
       )
       .accessibilityLabel("Markdown 编辑器")
       .accessibilityIdentifier("flux.editor")
@@ -917,8 +911,7 @@ private struct MarkdownEditorView: View {
 private struct MarkdownTextView: NSViewRepresentable {
   @Binding var text: String
   let selectedRange: NSRange?
-  let targetScrollFraction: Double?
-  let onScrollFractionChange: (Double) -> Void
+  let scrollSynchronizer: SplitScrollSynchronizer?
 
   func makeCoordinator() -> Coordinator {
     Coordinator(parent: self)
@@ -960,7 +953,11 @@ private struct MarkdownTextView: NSViewRepresentable {
     textView.isAutomaticTextReplacementEnabled = false
     textView.setAccessibilityIdentifier("flux.editor")
     scrollView.documentView = textView
-    context.coordinator.attach(scrollView: scrollView, textView: textView)
+    context.coordinator.attach(
+      scrollView: scrollView,
+      textView: textView,
+      scrollSynchronizer: scrollSynchronizer
+    )
 
     DispatchQueue.main.async {
       textView.window?.makeFirstResponder(textView)
@@ -970,6 +967,7 @@ private struct MarkdownTextView: NSViewRepresentable {
 
   func updateNSView(_ scrollView: NSScrollView, context: Context) {
     context.coordinator.parent = self
+    context.coordinator.updateScrollSynchronizer(scrollSynchronizer)
     guard let textView = scrollView.documentView as? NSTextView else { return }
     if textView.string != text {
       context.coordinator.isApplyingText = true
@@ -989,7 +987,6 @@ private struct MarkdownTextView: NSViewRepresentable {
       textView.setSelectedRange(selectedRange)
       textView.scrollRangeToVisible(selectedRange)
     }
-    context.coordinator.applyScrollFraction(targetScrollFraction)
   }
 
   static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
@@ -998,20 +995,28 @@ private struct MarkdownTextView: NSViewRepresentable {
   }
 
   @MainActor
-  final class Coordinator: NSObject, NSTextViewDelegate {
+  final class Coordinator: NSObject, NSTextViewDelegate, SplitScrollEndpoint {
     var parent: MarkdownTextView
     var isApplyingText = false
     private weak var scrollView: NSScrollView?
     private weak var textView: NSTextView?
-    private var isApplyingScroll = false
+    private weak var scrollSynchronizer: SplitScrollSynchronizer?
+    private var programmaticTargetY: CGFloat?
+    private var pendingUserFraction: Double?
+    private var isUserReportScheduled = false
 
     init(parent: MarkdownTextView) {
       self.parent = parent
     }
 
-    func attach(scrollView: NSScrollView, textView: NSTextView) {
+    func attach(
+      scrollView: NSScrollView,
+      textView: NSTextView,
+      scrollSynchronizer: SplitScrollSynchronizer?
+    ) {
       self.scrollView = scrollView
       self.textView = textView
+      updateScrollSynchronizer(scrollSynchronizer)
       NotificationCenter.default.addObserver(
         self,
         selector: #selector(boundsDidChange),
@@ -1021,13 +1026,26 @@ private struct MarkdownTextView: NSViewRepresentable {
     }
 
     func detach() {
+      if let scrollSynchronizer {
+        scrollSynchronizer.detach(self, from: .editor)
+      }
       NotificationCenter.default.removeObserver(
         self,
         name: NSView.boundsDidChangeNotification,
         object: scrollView?.contentView
       )
+      scrollSynchronizer = nil
       scrollView = nil
       textView = nil
+    }
+
+    func updateScrollSynchronizer(_ next: SplitScrollSynchronizer?) {
+      guard scrollSynchronizer !== next else { return }
+      if let scrollSynchronizer {
+        scrollSynchronizer.detach(self, from: .editor)
+      }
+      scrollSynchronizer = next
+      next?.attach(self, to: .editor)
     }
 
     @objc private func boundsDidChange(_ notification: Notification) {
@@ -1039,24 +1057,38 @@ private struct MarkdownTextView: NSViewRepresentable {
       parent.text = textView.string
     }
 
-    func applyScrollFraction(_ value: Double?) {
-      guard let value, let scrollView, let textView else { return }
+    func applySynchronizedScrollFraction(_ value: Double) {
+      guard let scrollView, let textView else { return }
       let maximum = max(textView.bounds.height - scrollView.contentSize.height, 0)
       guard maximum > 0 else { return }
       let target = maximum * min(1, max(0, value))
       if abs(scrollView.contentView.bounds.origin.y - target) < 1 { return }
-      isApplyingScroll = true
+      pendingUserFraction = nil
+      programmaticTargetY = target
       scrollView.contentView.scroll(to: NSPoint(x: 0, y: target))
       scrollView.reflectScrolledClipView(scrollView.contentView)
-      isApplyingScroll = false
     }
 
     private func reportScrollFraction() {
-      guard !isApplyingScroll, let scrollView, let textView else { return }
+      guard let scrollView, let textView else { return }
+      if let programmaticTargetY {
+        if abs(scrollView.contentView.bounds.origin.y - programmaticTargetY) < 1 {
+          return
+        }
+        self.programmaticTargetY = nil
+      }
       let maximum = max(textView.bounds.height - scrollView.contentSize.height, 0)
-      parent.onScrollFractionChange(
+      pendingUserFraction =
         maximum > 0 ? min(1, max(0, scrollView.contentView.bounds.origin.y / maximum)) : 0
-      )
+      guard !isUserReportScheduled else { return }
+      isUserReportScheduled = true
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.isUserReportScheduled = false
+        guard let fraction = self.pendingUserFraction else { return }
+        self.pendingUserFraction = nil
+        self.scrollSynchronizer?.userDidScroll(.editor, fraction: fraction)
+      }
     }
   }
 }

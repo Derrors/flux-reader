@@ -15,6 +15,7 @@ import './styles/macos.css';
 let pendingPayload = { ...DEFAULT_RENDER_PAYLOAD };
 let renderListener = null;
 let pendingScrollFraction = null;
+let programmaticScrollTop = null;
 
 function rendererScrollElement() {
   return globalThis.document?.querySelector('.macos-renderer-scroll') || null;
@@ -27,7 +28,13 @@ function applyScrollFraction(value) {
   const element = rendererScrollElement();
   if (!element) return false;
   const maximum = Math.max(element.scrollHeight - element.clientHeight, 0);
-  element.scrollTop = maximum * pendingScrollFraction;
+  const target = maximum * pendingScrollFraction;
+  if (Math.abs(element.scrollTop - target) < 1) {
+    programmaticScrollTop = null;
+    return true;
+  }
+  programmaticScrollTop = target;
+  element.scrollTop = target;
   return true;
 }
 
@@ -46,7 +53,7 @@ function notifyNativeRendererReady() {
   globalThis.webkit?.messageHandlers?.rendererReady?.postMessage('ready');
 }
 
-function MacOSRenderer() {
+export function MacOSRenderer() {
   const [renderState, setRenderState] = useState(pendingPayload);
 
   useEffect(() => {
@@ -73,9 +80,21 @@ function MacOSRenderer() {
       if (frame) return;
       frame = globalThis.requestAnimationFrame(() => {
         frame = 0;
+        if (
+          programmaticScrollTop != null
+          && Math.abs(element.scrollTop - programmaticScrollTop) < 1
+        ) {
+          programmaticScrollTop = null;
+          return;
+        }
+        programmaticScrollTop = null;
         const maximum = Math.max(element.scrollHeight - element.clientHeight, 0);
         const fraction = maximum > 0 ? element.scrollTop / maximum : 0;
-        globalThis.webkit?.messageHandlers?.scrollPosition?.postMessage(fraction);
+        pendingScrollFraction = fraction;
+        globalThis.webkit?.messageHandlers?.scrollPosition?.postMessage({
+          kind: 'user',
+          fraction,
+        });
       });
     };
     element.addEventListener('scroll', onScroll, { passive: true });

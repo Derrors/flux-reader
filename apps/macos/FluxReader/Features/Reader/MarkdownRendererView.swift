@@ -6,8 +6,7 @@ struct MarkdownRendererView: View {
   var findQuery = ""
   var findCaseSensitive = false
   var activeFindMatch = 0
-  var targetScrollFraction: Double?
-  var onScrollFractionChange: @MainActor (Double) -> Void = { _ in }
+  var scrollSynchronizer: SplitScrollSynchronizer? = nil
 
   @State private var usesNativeFallback = false
 
@@ -19,8 +18,7 @@ struct MarkdownRendererView: View {
           findQuery: findQuery,
           findCaseSensitive: findCaseSensitive,
           activeFindMatch: activeFindMatch,
-          targetScrollFraction: targetScrollFraction,
-          onScrollFractionChange: onScrollFractionChange,
+          scrollSynchronizer: scrollSynchronizer,
           onFailure: { usesNativeFallback = true }
         )
       } else {

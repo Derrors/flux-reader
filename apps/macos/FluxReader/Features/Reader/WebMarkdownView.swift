@@ -3,6 +3,57 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 
+enum SplitScrollPane {
+  case editor
+  case preview
+}
+
+@MainActor
+protocol SplitScrollEndpoint: AnyObject {
+  func applySynchronizedScrollFraction(_ fraction: Double)
+}
+
+@MainActor
+final class SplitScrollSynchronizer: ObservableObject {
+  private weak var editorEndpoint: (any SplitScrollEndpoint)?
+  private weak var previewEndpoint: (any SplitScrollEndpoint)?
+
+  func attach(_ endpoint: any SplitScrollEndpoint, to pane: SplitScrollPane) {
+    switch pane {
+    case .editor:
+      editorEndpoint = endpoint
+    case .preview:
+      previewEndpoint = endpoint
+    }
+  }
+
+  func detach(_ endpoint: any SplitScrollEndpoint, from pane: SplitScrollPane) {
+    switch pane {
+    case .editor where editorEndpoint === endpoint:
+      editorEndpoint = nil
+    case .preview where previewEndpoint === endpoint:
+      previewEndpoint = nil
+    default:
+      break
+    }
+  }
+
+  func userDidScroll(_ source: SplitScrollPane, fraction: Double) {
+    let clampedFraction = min(1, max(0, fraction))
+    switch source {
+    case .editor:
+      previewEndpoint?.applySynchronizedScrollFraction(clampedFraction)
+    case .preview:
+      editorEndpoint?.applySynchronizedScrollFraction(clampedFraction)
+    }
+  }
+
+  func resetPositions() {
+    editorEndpoint?.applySynchronizedScrollFraction(0)
+    previewEndpoint?.applySynchronizedScrollFraction(0)
+  }
+}
+
 struct WebMarkdownView: NSViewRepresentable {
   static let rendererURL = Bundle.main.url(
     forResource: "macos",
@@ -17,8 +68,7 @@ struct WebMarkdownView: NSViewRepresentable {
   let findQuery: String
   let findCaseSensitive: Bool
   let activeFindMatch: Int
-  let targetScrollFraction: Double?
-  let onScrollFractionChange: @MainActor (Double) -> Void
+  let scrollSynchronizer: SplitScrollSynchronizer?
   let onFailure: @MainActor () -> Void
 
   @Environment(\.colorScheme) private var colorScheme
@@ -28,22 +78,20 @@ struct WebMarkdownView: NSViewRepresentable {
     findQuery: String = "",
     findCaseSensitive: Bool = false,
     activeFindMatch: Int = 0,
-    targetScrollFraction: Double? = nil,
-    onScrollFractionChange: @escaping @MainActor (Double) -> Void = { _ in },
+    scrollSynchronizer: SplitScrollSynchronizer? = nil,
     onFailure: @escaping @MainActor () -> Void
   ) {
     self.document = document
     self.findQuery = findQuery
     self.findCaseSensitive = findCaseSensitive
     self.activeFindMatch = activeFindMatch
-    self.targetScrollFraction = targetScrollFraction
-    self.onScrollFractionChange = onScrollFractionChange
+    self.scrollSynchronizer = scrollSynchronizer
     self.onFailure = onFailure
   }
 
   func makeCoordinator() -> Coordinator {
     Coordinator(
-      onScrollFractionChange: onScrollFractionChange,
+      scrollSynchronizer: scrollSynchronizer,
       onFailure: onFailure
     )
   }
@@ -75,8 +123,7 @@ struct WebMarkdownView: NSViewRepresentable {
       theme: rendererTheme,
       findQuery: findQuery,
       findCaseSensitive: findCaseSensitive,
-      activeFindMatch: activeFindMatch,
-      targetScrollFraction: targetScrollFraction
+      activeFindMatch: activeFindMatch
     )
     context.coordinator.loadRenderer()
     return webView
@@ -84,14 +131,13 @@ struct WebMarkdownView: NSViewRepresentable {
 
   func updateNSView(_ webView: WKWebView, context: Context) {
     context.coordinator.onFailure = onFailure
-    context.coordinator.onScrollFractionChange = onScrollFractionChange
+    context.coordinator.updateScrollSynchronizer(scrollSynchronizer)
     context.coordinator.update(
       document: document,
       theme: rendererTheme,
       findQuery: findQuery,
       findCaseSensitive: findCaseSensitive,
-      activeFindMatch: activeFindMatch,
-      targetScrollFraction: targetScrollFraction
+      activeFindMatch: activeFindMatch
     )
   }
 
@@ -126,32 +172,34 @@ struct WebMarkdownView: NSViewRepresentable {
 
   @MainActor
   final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler,
-    WKUIDelegate
+    WKUIDelegate, SplitScrollEndpoint
   {
     static let readyHandlerName = "rendererReady"
     static let copyTextHandlerName = "copyText"
     static let scrollHandlerName = "scrollPosition"
 
-    var onScrollFractionChange: @MainActor (Double) -> Void
     var onFailure: @MainActor () -> Void
     let documentResourceHandler = DocumentResourceSchemeHandler()
 
     private weak var webView: WKWebView?
+    private weak var scrollSynchronizer: SplitScrollSynchronizer?
     private var pendingPayload: RenderPayload?
     private var lastRenderedPayload: RenderPayload?
     private var rendererReady = false
     private var didReportFailure = false
     private var lastResourceDocument: MarkdownDocument?
     private var resourceToken = UUID().uuidString
-    private var lastTargetScrollFraction: Double?
-    private var pendingTargetScrollFraction: Double?
+    private var pendingScrollFraction: Double?
+    private var isScrollUpdateInFlight = false
 
     init(
-      onScrollFractionChange: @escaping @MainActor (Double) -> Void,
+      scrollSynchronizer: SplitScrollSynchronizer?,
       onFailure: @escaping @MainActor () -> Void
     ) {
-      self.onScrollFractionChange = onScrollFractionChange
+      self.scrollSynchronizer = scrollSynchronizer
       self.onFailure = onFailure
+      super.init()
+      scrollSynchronizer?.attach(self, to: .preview)
     }
 
     func attach(to webView: WKWebView) {
@@ -159,6 +207,9 @@ struct WebMarkdownView: NSViewRepresentable {
     }
 
     func detach(from webView: WKWebView) {
+      if let scrollSynchronizer {
+        scrollSynchronizer.detach(self, from: .preview)
+      }
       webView.configuration.userContentController.removeScriptMessageHandler(
         forName: Self.readyHandlerName
       )
@@ -170,7 +221,17 @@ struct WebMarkdownView: NSViewRepresentable {
       )
       webView.navigationDelegate = nil
       webView.uiDelegate = nil
+      scrollSynchronizer = nil
       self.webView = nil
+    }
+
+    func updateScrollSynchronizer(_ next: SplitScrollSynchronizer?) {
+      guard scrollSynchronizer !== next else { return }
+      if let scrollSynchronizer {
+        scrollSynchronizer.detach(self, from: .preview)
+      }
+      scrollSynchronizer = next
+      next?.attach(self, to: .preview)
     }
 
     func update(
@@ -178,8 +239,7 @@ struct WebMarkdownView: NSViewRepresentable {
       theme: String,
       findQuery: String,
       findCaseSensitive: Bool,
-      activeFindMatch: Int,
-      targetScrollFraction: Double?
+      activeFindMatch: Int
     ) {
       if document != lastResourceDocument {
         resourceToken = UUID().uuidString
@@ -199,7 +259,6 @@ struct WebMarkdownView: NSViewRepresentable {
         activeFindMatch: activeFindMatch
       )
       renderIfReady()
-      updateScrollFraction(targetScrollFraction)
     }
 
     func loadRenderer() {
@@ -219,17 +278,24 @@ struct WebMarkdownView: NSViewRepresentable {
       case Self.readyHandlerName:
         rendererReady = true
         renderIfReady()
-        updateScrollFraction(pendingTargetScrollFraction)
+        flushPendingScrollFraction()
       case Self.copyTextHandlerName:
         copyText(message.body)
       case Self.scrollHandlerName:
-        if let value = message.body as? NSNumber {
+        if let payload = message.body as? [String: Any],
+          payload["kind"] as? String == "user",
+          let value = payload["fraction"] as? NSNumber
+        {
           let fraction = min(1, max(0, value.doubleValue))
-          // Keep the cache aligned with the renderer's actual position. If a
-          // user scrolls the preview after a programmatic sync, a later editor
-          // scroll may legitimately request the old fraction again.
-          lastTargetScrollFraction = fraction
-          onScrollFractionChange(fraction)
+          scrollSynchronizer?.userDidScroll(.preview, fraction: fraction)
+        } else if let value = message.body as? NSNumber {
+          // Accept the legacy payload while an already-loaded renderer is
+          // being replaced during development. Release builds use the typed
+          // user-scroll message above.
+          scrollSynchronizer?.userDidScroll(
+            .preview,
+            fraction: min(1, max(0, value.doubleValue))
+          )
         }
       default:
         break
@@ -317,16 +383,28 @@ struct WebMarkdownView: NSViewRepresentable {
       }
     }
 
-    private func updateScrollFraction(_ value: Double?) {
-      pendingTargetScrollFraction = value
-      guard rendererReady, let webView, let value else { return }
-      let fraction = min(1, max(0, value))
-      if let lastTargetScrollFraction, abs(lastTargetScrollFraction - fraction) < 0.002 {
-        return
-      }
-      lastTargetScrollFraction = fraction
+    func applySynchronizedScrollFraction(_ fraction: Double) {
+      pendingScrollFraction = min(1, max(0, fraction))
+      flushPendingScrollFraction()
+    }
+
+    private func flushPendingScrollFraction() {
+      guard
+        rendererReady,
+        let webView,
+        !isScrollUpdateInFlight,
+        let fraction = pendingScrollFraction
+      else { return }
+
+      pendingScrollFraction = nil
+      isScrollUpdateInFlight = true
       Task { @MainActor [weak self, weak webView] in
-        guard let self, let webView else { return }
+        guard let self else { return }
+        defer {
+          self.isScrollUpdateInFlight = false
+          self.flushPendingScrollFraction()
+        }
+        guard let webView else { return }
         do {
           _ = try await webView.callAsyncJavaScript(
             "globalThis.fluxReader.setScrollFraction(fraction)",
