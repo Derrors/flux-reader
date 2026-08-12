@@ -9,15 +9,30 @@ const { releaseMetadata, syncVersion } = require('../sync-version');
 
 const temporaryRoots = [];
 
-function fixture({ version = '1.2.3', manifestVersion = version, xcodeVersion = version } = {}) {
+function fixture({
+  version = '1.2.3',
+  manifestVersion = version,
+  xcodeVersion = version,
+  windowsCargoVersion = version,
+  tauriVersion = version,
+} = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flux-reader-version-test-'));
   temporaryRoots.push(root);
   fs.mkdirSync(path.join(root, 'apps', 'fnos', 'package'), { recursive: true });
   fs.mkdirSync(path.join(root, 'apps', 'macos', 'FluxReader.xcodeproj'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'apps', 'windows', 'src-tauri'), { recursive: true });
   fs.writeFileSync(path.join(root, 'VERSION'), `${version}\n`);
   fs.writeFileSync(
     path.join(root, 'apps', 'fnos', 'package', 'manifest'),
     `appname="flux-reader"\nversion="${manifestVersion}"\n`
+  );
+  fs.writeFileSync(
+    path.join(root, 'apps', 'windows', 'src-tauri', 'Cargo.toml'),
+    `[package]\nname = "flux-reader-windows"\nversion = "${windowsCargoVersion}"\n\n[dependencies]\nserde = "1"\n`
+  );
+  fs.writeFileSync(
+    path.join(root, 'apps', 'windows', 'src-tauri', 'tauri.conf.json'),
+    `${JSON.stringify({ productName: 'Flux Reader', version: tauriVersion }, null, 2)}\n`
   );
   fs.writeFileSync(
     path.join(root, 'apps', 'macos', 'FluxReader.xcodeproj', 'project.pbxproj'),
@@ -55,6 +70,7 @@ test('keeps release tag and asset names in one versioned contract', () => {
     fpkAsset: 'flux-reader-1.2.3.fpk',
     dmgAsset: 'Flux-Reader-1.2.3-unnotarized-universal.dmg',
     signedDmgAsset: 'Flux-Reader-1.2.3-universal.dmg',
+    windowsAsset: 'flux-reader-1.2.3-windows-x64.msi',
   });
 });
 
@@ -83,11 +99,17 @@ test('writes the same release contract to GitHub Actions outputs', () => {
     fpk_asset: metadata.fpkAsset,
     dmg_asset: metadata.dmgAsset,
     signed_dmg_asset: metadata.signedDmgAsset,
+    windows_asset: metadata.windowsAsset,
   });
 });
 
 test('rejects drift without modifying source files', () => {
-  const root = fixture({ manifestVersion: '1.2.2', xcodeVersion: '1.2.1' });
+  const root = fixture({
+    manifestVersion: '1.2.2',
+    xcodeVersion: '1.2.1',
+    windowsCargoVersion: '1.1.9',
+    tauriVersion: '1.0.0',
+  });
   assert.throws(() => syncVersion({ root }), /发布版本未同步/);
   assert.match(
     fs.readFileSync(path.join(root, 'apps', 'fnos', 'package', 'manifest'), 'utf8'),
@@ -96,19 +118,33 @@ test('rejects drift without modifying source files', () => {
 });
 
 test('writes every distribution version and is idempotent', () => {
-  const root = fixture({ version: '2.0.1', manifestVersion: '1.9.9', xcodeVersion: '1.0.0' });
+  const root = fixture({
+    version: '2.0.1',
+    manifestVersion: '1.9.9',
+    xcodeVersion: '1.0.0',
+    windowsCargoVersion: '1.8.0',
+    tauriVersion: '1.7.0',
+  });
   assert.equal(syncVersion({ root, write: true }), '2.0.1');
 
   const manifestPath = path.join(root, 'apps', 'fnos', 'package', 'manifest');
   const projectPath = path.join(root, 'apps', 'macos', 'FluxReader.xcodeproj', 'project.pbxproj');
+  const cargoPath = path.join(root, 'apps', 'windows', 'src-tauri', 'Cargo.toml');
+  const tauriPath = path.join(root, 'apps', 'windows', 'src-tauri', 'tauri.conf.json');
   const firstManifest = fs.readFileSync(manifestPath, 'utf8');
   const firstProject = fs.readFileSync(projectPath, 'utf8');
+  const firstCargo = fs.readFileSync(cargoPath, 'utf8');
+  const firstTauriConfig = fs.readFileSync(tauriPath, 'utf8');
   assert.match(firstManifest, /version="2\.0\.1"/);
   assert.equal((firstProject.match(/MARKETING_VERSION = 2\.0\.1;/g) || []).length, 2);
+  assert.match(firstCargo, /^version = "2\.0\.1"$/m);
+  assert.equal(JSON.parse(firstTauriConfig).version, '2.0.1');
 
   assert.equal(syncVersion({ root, write: true }), '2.0.1');
   assert.equal(fs.readFileSync(manifestPath, 'utf8'), firstManifest);
   assert.equal(fs.readFileSync(projectPath, 'utf8'), firstProject);
+  assert.equal(fs.readFileSync(cargoPath, 'utf8'), firstCargo);
+  assert.equal(fs.readFileSync(tauriPath, 'utf8'), firstTauriConfig);
 });
 
 test('rejects invalid versions and ambiguous version fields', () => {

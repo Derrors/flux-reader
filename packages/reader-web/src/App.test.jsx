@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     search: vi.fn(),
     workspaceState: vi.fn(),
     resourceUrl: vi.fn(),
+    subscribeFileChanges: vi.fn(),
   },
   trim: {
     initSdk: vi.fn(),
@@ -162,6 +163,7 @@ beforeEach(() => {
   mocks.api.resourceUrl.mockImplementation((documentPath, resourcePath, workspacePath, revision) => (
     `/resource?document=${documentPath}&path=${resourcePath}&workspace=${workspacePath || ''}&v=${revision}`
   ));
+  mocks.api.subscribeFileChanges.mockResolvedValue(() => {});
   window.history.replaceState({}, '', '/app/flux-reader/');
   const storedValues = new Map();
   Object.defineProperty(window, 'localStorage', {
@@ -976,6 +978,93 @@ describe('App fnOS 能力补齐', () => {
     expect(mocks.api.file).toHaveBeenCalledTimes(1);
   });
 
+  it('原生文件监听事件刷新工作区和正文，且不启动 15 秒轮询', async () => {
+    let fileChangeListener = null;
+    mocks.api.env.mockResolvedValueOnce({
+      openApiAvailable: true,
+      capabilities: { fileWatching: true },
+    });
+    mocks.api.subscribeFileChanges.mockImplementationOnce(async (listener) => {
+      fileChangeListener = listener;
+      return () => {};
+    });
+    const timeoutSpy = vi.spyOn(window, 'setTimeout');
+    const user = await renderReady();
+    try {
+      await waitFor(() => expect(fileChangeListener).toBeTypeOf('function'));
+      expect(timeoutSpy.mock.calls.some((call) => call[1] === 15_000)).toBe(false);
+
+      mocks.trim.pickFolder.mockResolvedValueOnce('/share/docs');
+      mocks.api.list.mockResolvedValueOnce({ entries: docsEntries });
+      await user.click(screen.getByRole('button', { name: '打开文件夹' }));
+      mocks.api.file.mockResolvedValueOnce({
+        content: '监听前', actualPath: '/share/docs/a.md', size: 1, mtime: 1, ctime: 1,
+      });
+      await user.click(screen.getByRole('button', { name: /a\.md/ }));
+
+      mocks.api.list.mockResolvedValueOnce({
+        entries: [{ path: '/share/docs/c.md', name: 'c.md', type: 'file', isFile: true }],
+      });
+      mocks.api.fileState.mockResolvedValueOnce({
+        actualPath: '/share/docs/a.md', size: 2, mtime: 2, ctime: 2,
+      });
+      mocks.api.file.mockResolvedValueOnce({
+        content: '监听后', actualPath: '/share/docs/a.md', size: 2, mtime: 2, ctime: 2,
+      });
+      act(() => fileChangeListener({ sequence: 1 }));
+
+      expect(await screen.findByRole('button', { name: /c\.md/ })).toBeVisible();
+      expect(await screen.findByTestId('markdown-view')).toHaveTextContent('监听后');
+      expect(timeoutSpy.mock.calls.some((call) => call[1] === 15_000)).toBe(false);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it('单文件授权收到原生事件时即使父目录不可查询也会失效本地图片 URL', async () => {
+    let fileChangeListener = null;
+    mocks.api.env.mockResolvedValueOnce({
+      openApiAvailable: true,
+      capabilities: { fileWatching: true, localResources: true },
+    });
+    mocks.api.subscribeFileChanges.mockImplementationOnce(async (listener) => {
+      fileChangeListener = listener;
+      return () => {};
+    });
+    const user = await renderReady();
+    await waitFor(() => expect(fileChangeListener).toBeTypeOf('function'));
+
+    mocks.trim.pickMarkdownFile.mockResolvedValueOnce('/share/a.md');
+    mocks.api.file.mockResolvedValueOnce({
+      content: '![cover](images/cover.png)',
+      actualPath: '/volume/docs/a.md',
+      size: 26,
+      mtime: 7,
+      ctime: 1,
+      revision: 'a'.repeat(64),
+    });
+    await user.click(screen.getByRole('button', { name: '打开文件' }));
+    const initialImageUrl = (await screen.findByTestId('markdown-view'))
+      .getAttribute('data-resolved-image');
+
+    mocks.api.fileState.mockResolvedValueOnce({
+      actualPath: '/volume/docs/a.md',
+      size: 26,
+      mtime: 7,
+      ctime: 1,
+      revision: 'a'.repeat(64),
+    });
+    mocks.api.workspaceState.mockRejectedValueOnce(
+      httpError('未授权父目录', 403, 'PATH_NOT_AUTHORIZED'),
+    );
+    act(() => fileChangeListener({ sequence: 1 }));
+
+    await waitFor(() => expect(screen.getByTestId('markdown-view'))
+      .not.toHaveAttribute('data-resolved-image', initialImageUrl));
+    await waitFor(() => expect(mocks.api.workspaceState).toHaveBeenCalledWith('/volume/docs'));
+    expect(mocks.api.file).toHaveBeenCalledTimes(1);
+  });
+
   it('15 秒轮询按 workspace revision 更新文件树和当前文档，隐藏页面暂停', async () => {
     const realSetTimeout = window.setTimeout.bind(window);
     let pollCallback = null;
@@ -1088,6 +1177,32 @@ describe('App fnOS 能力补齐', () => {
 });
 
 describe('App fnOS 编辑、保存与恢复', () => {
+  it('safeSave capability 关闭时保留编辑与恢复草稿，但不发起降级保存', async () => {
+    mocks.api.env.mockResolvedValueOnce({
+      openApiAvailable: true,
+      uid: 'windows-local',
+      capabilities: {
+        safeSave: false,
+        sessionScopedAuthorization: true,
+      },
+    });
+    const user = await renderReady();
+    const editor = await openEditableFile(user, {
+      path: 'C:/Users/Alice/Notes/a.md',
+      actualPath: 'C:/Users/Alice/Notes/a.md',
+    });
+
+    await user.type(editor, '本地修改');
+
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+    expect(screen.getByText(/当前平台尚未启用安全保存/)).toBeVisible();
+    await waitFor(() => {
+      expect(readDraft('windows-local', 'C:/Users/Alice/Notes/a.md')?.content)
+        .toContain('本地修改');
+    });
+    expect(mocks.api.saveFile).not.toHaveBeenCalled();
+  });
+
   it('只读文稿不允许进入编辑或保存', async () => {
     const user = await renderReady();
     mocks.trim.pickMarkdownFile.mockResolvedValueOnce('/share/read-only.md');
@@ -2263,6 +2378,113 @@ describe('App fnOS 编辑、保存与恢复', () => {
       '/share/committed.md',
       recoveryId,
     ));
+  });
+
+  it('已提交记录在磁盘随后变化时也不会自动清理恢复版本', async () => {
+    const recoveryId = 'd'.repeat(48);
+    const user = await renderReady();
+    mocks.trim.pickMarkdownFile.mockResolvedValueOnce('/share/changed-after-commit.md');
+    mocks.api.file.mockResolvedValueOnce({
+      content: '外部新版本',
+      actualPath: '/share/changed-after-commit.md',
+      revision: 'c'.repeat(64),
+      writable: true,
+      recovery: {
+        available: true,
+        records: [{
+          recoveryId,
+          phase: 'committed',
+          targetMatches: false,
+          currentMatchesAttempt: false,
+          attemptedAvailable: true,
+          observedAvailable: true,
+        }],
+      },
+    });
+
+    await user.click(screen.getByRole('button', { name: '打开文件' }));
+    expect(await screen.findByTestId('markdown-view')).toHaveTextContent('外部新版本');
+    expect(mocks.api.discardRecovery).not.toHaveBeenCalled();
+  });
+
+  it('explicit cleanup 在磁盘变化后仍提供明确清理入口', async () => {
+    const recoveryId = 'b'.repeat(48);
+    mocks.api.env.mockResolvedValueOnce({
+      openApiAvailable: true,
+      capabilities: {
+        recoveryPolicy: { cleanupMode: 'explicit' },
+      },
+    });
+    const user = await renderReady();
+    mocks.trim.pickMarkdownFile.mockResolvedValueOnce('/share/explicit-old-commit.md');
+    mocks.api.file.mockResolvedValueOnce({
+      content: '外部新版本',
+      actualPath: '/share/explicit-old-commit.md',
+      revision: 'c'.repeat(64),
+      writable: true,
+      recovery: {
+        available: true,
+        records: [{
+          recoveryId,
+          phase: 'committed',
+          targetMatches: false,
+          currentMatchesAttempt: false,
+          attemptedAvailable: true,
+        }],
+      },
+    });
+
+    await user.click(screen.getByRole('button', { name: '打开文件' }));
+    const dialog = await screen.findByRole('dialog', { name: '发现未完成的保存' });
+    expect(dialog).toHaveTextContent('旧恢复记录尚未清理');
+    expect(within(dialog).queryByRole('button', { name: /恢复/ })).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: '清理旧记录' }));
+    expect(mocks.api.discardRecovery).toHaveBeenCalledWith(
+      '/share/explicit-old-commit.md',
+      recoveryId,
+      abortOptions(),
+    );
+  });
+
+  it('explicit cleanup capability 要求用户确认后才清理 committed sidecar', async () => {
+    const recoveryId = 'c'.repeat(48);
+    mocks.api.env.mockResolvedValueOnce({
+      openApiAvailable: true,
+      capabilities: {
+        recoveryPolicy: { cleanupMode: 'explicit' },
+      },
+    });
+    const user = await renderReady();
+    mocks.trim.pickMarkdownFile.mockResolvedValueOnce('/share/explicit-cleanup.md');
+    mocks.api.file.mockResolvedValueOnce({
+      content: '已经提交',
+      actualPath: '/share/explicit-cleanup.md',
+      revision: 'b'.repeat(64),
+      writable: true,
+      recovery: {
+        available: true,
+        records: [{
+          recoveryId,
+          phase: 'committed',
+          targetMatches: true,
+          currentMatchesAttempt: true,
+          attemptedAvailable: true,
+        }],
+      },
+    });
+
+    await user.click(screen.getByRole('button', { name: '打开文件' }));
+    const dialog = await screen.findByRole('dialog', { name: '发现未完成的保存' });
+    expect(dialog).toHaveTextContent('旧恢复记录尚未清理');
+    expect(mocks.api.discardRecovery).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole('button', { name: '清理旧记录' }));
+    expect(mocks.api.discardRecovery).toHaveBeenCalledWith(
+      '/share/explicit-cleanup.md',
+      recoveryId,
+      abortOptions(),
+    );
   });
 
   it('保存返回 recovery-required 时立即加载服务端日志并保留编辑草稿', async () => {

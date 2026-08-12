@@ -25,21 +25,31 @@ import {
 } from './limits';
 import { isSaveConflict, requiresSaveRecovery } from './saveOutcome';
 import { useLatestPreviewContent } from './useLatestPreviewContent';
+import {
+  basenameHostPath,
+  containsHostPath,
+  dirnameHostPath,
+  isAbsoluteHostPath,
+  normalizeHostRoot,
+} from './platform/path';
 
 const MAX_WORKSPACES = 8;
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const FOCUS_REFRESH_DELAY_MS = 150;
+const FILE_CHANGE_REFRESH_DELAY_MS = 120;
+const FILE_CHANGE_BLOCKED_RETRY_MS = 500;
 const SEARCH_DELAY_MS = 250;
 const DRAFT_PERSIST_DELAY_MS = 500;
 const MARKDOWN_PATH = /\.(?:md|markdown|mdx)$/i;
 
-/** Read an absolute Markdown path supplied by the fnOS file association. */
+/** Read an absolute Markdown path supplied by a host file association. */
 function readLaunchPath() {
   try {
     const params = new URLSearchParams(window.location.search);
     const filePath = params.get('path') || params.get('file');
-    if (!filePath || !filePath.startsWith('/')) return null;
-    if (filePath.includes('\0') || !MARKDOWN_PATH.test(filePath)) return null;
+    if (!isAbsoluteHostPath(filePath) || filePath.includes('\0') || !MARKDOWN_PATH.test(filePath)) {
+      return null;
+    }
     return filePath;
   } catch {
     return null;
@@ -47,24 +57,19 @@ function readLaunchPath() {
 }
 
 function basename(filePath) {
-  return String(filePath).split('/').filter(Boolean).pop() || filePath;
+  return basenameHostPath(filePath);
 }
 
 function dirname(filePath) {
-  const normalized = String(filePath || '').replace(/\/+$/, '');
-  const boundary = normalized.lastIndexOf('/');
-  return boundary <= 0 ? '/' : normalized.slice(0, boundary);
+  return dirnameHostPath(filePath);
 }
 
 function normalizeWorkspacePath(value) {
-  const path = typeof value === 'string' ? value : '';
-  if (!path.startsWith('/') || path.includes('\0')) return null;
-  return path === '/' ? path : path.replace(/\/+$/, '');
+  return normalizeHostRoot(value);
 }
 
 function containsPath(rootPath, filePath) {
-  if (!rootPath || !filePath) return false;
-  return rootPath === '/' || filePath === rootPath || filePath.startsWith(`${rootPath}/`);
+  return containsHostPath(rootPath, filePath);
 }
 
 function workspaceActualPath(workspace) {
@@ -251,6 +256,29 @@ function actionableServerRecoveryRecords(value) {
   ));
 }
 
+function explicitCleanupRecoveryRecords(value, env) {
+  if (
+    env?.capabilities?.recoveryPolicy?.cleanupMode !== 'explicit'
+    || !value?.available
+    || !Array.isArray(value.records)
+  ) return [];
+  return value.records.filter((record) => (
+    record &&
+    typeof record.recoveryId === 'string' &&
+    !record.inProgress &&
+    // 路径后来被外部版本占用时也必须保留明确的清理入口；是否仍匹配
+    // attempted 只决定诊断，不能让 sidecar 永久卡住恢复配额。
+    record.phase === 'committed'
+  ));
+}
+
+function recoveryRecordsForUI(value, env) {
+  return [
+    ...actionableServerRecoveryRecords(value),
+    ...explicitCleanupRecoveryRecords(value, env),
+  ];
+}
+
 function upsertWorkspace(workspaces, nextWorkspace) {
   const matchingIndexes = workspaces.flatMap((workspace, index) => (
     workspace.path === nextWorkspace.path ||
@@ -296,7 +324,7 @@ function normalizeSearchResults(data, workspaces) {
     if (!value || typeof value !== 'object') return [];
     const path = typeof value.path === 'string' ? value.path : '';
     if (
-      !path.startsWith('/') ||
+      !isAbsoluteHostPath(path) ||
       path.length > 4096 ||
       path.includes('\0') ||
       !MARKDOWN_PATH.test(path) ||
@@ -414,6 +442,8 @@ export default function App() {
       ? draft !== content
       : current?.contentUnavailable === true
   );
+  const safeSaveAvailable = env?.capabilities?.safeSave !== false;
+  const sessionScopedAuthorization = env?.capabilities?.sessionScopedAuthorization === true;
   const renderedContent = draft ?? content;
   const { previewContent, flushPreviewContent } = useLatestPreviewContent(
     renderedContent,
@@ -690,8 +720,14 @@ export default function App() {
     if (!selected?.path || snapshotContent == null || !dirtyRef.current) {
       return Promise.resolve(true);
     }
+    if (envRef.current?.capabilities?.safeSave === false) {
+      setError('当前平台尚未启用安全保存；修改已保留为本地恢复草稿');
+      return Promise.resolve(false);
+    }
     if (selected.writable === false) {
-      setError('当前文稿为只读；请在 fnOS 应用设置中授予读写权限后重试');
+      setError(envRef.current?.capabilities?.sessionScopedAuthorization === true
+        ? '当前文稿为只读；请检查 Windows 文件权限后重试'
+        : '当前文稿为只读；请在 fnOS 应用设置中授予读写权限后重试');
       return Promise.resolve(false);
     }
     const contentBytes = new TextEncoder().encode(snapshotContent).byteLength;
@@ -797,7 +833,7 @@ export default function App() {
               requestSeq !== documentRequestSeqRef.current ||
               currentRef.current?.path !== selected.path
             ) return false;
-            const records = actionableServerRecoveryRecords(serverState);
+            const records = recoveryRecordsForUI(serverState, envRef.current);
             currentRef.current = diskDocument;
             contentRef.current = diskContent;
             dirtyRef.current = draftRef.current !== diskContent;
@@ -813,10 +849,12 @@ export default function App() {
               );
             }
             if (records.length > 0) {
+              const record = records[0];
               updateServerRecovery({
                 document: diskDocument,
                 records,
-                record: records[0],
+                record,
+                cleanupOnly: record.phase === 'committed',
               });
             }
           } catch {
@@ -829,8 +867,9 @@ export default function App() {
                 requestSeq !== documentRequestSeqRef.current ||
                 currentRef.current?.path !== selected.path
               ) return false;
-              const records = actionableServerRecoveryRecords(serverState);
+              const records = recoveryRecordsForUI(serverState, envRef.current);
               if (records.length > 0) {
+                const record = records[0];
                 const diskDocument = {
                   ...selected,
                   actualPath: diskState.actualPath || selected.actualPath || selected.path,
@@ -850,7 +889,8 @@ export default function App() {
                 updateServerRecovery({
                   document: diskDocument,
                   records,
-                  record: records[0],
+                  record,
+                  cleanupOnly: record.phase === 'committed',
                   diskReadable: false,
                 });
               }
@@ -1570,9 +1610,13 @@ export default function App() {
         contentUnavailableReason: null,
       };
       const storedDraft = readDraft(envRef.current?.uid, actualPath);
-      const serverRecords = actionableServerRecoveryRecords(result.recovery);
+      const serverRecords = recoveryRecordsForUI(result.recovery, envRef.current);
       const committedRecords = result.recovery?.available && Array.isArray(result.recovery.records)
-        ? result.recovery.records.filter((record) => record?.phase === 'committed')
+        ? result.recovery.records.filter((record) => (
+          record?.phase === 'committed'
+          && record.currentMatchesAttempt === true
+          && envRef.current?.capabilities?.recoveryPolicy?.cleanupMode !== 'explicit'
+        ))
         : [];
       let nextDraft = text;
       let nextRecovery = null;
@@ -1601,9 +1645,17 @@ export default function App() {
       setCurrent(nextCurrent);
       updateConflict(null);
       updateRecovery(nextRecovery);
-      updateServerRecovery(serverRecords.length > 0
-        ? { document: nextCurrent, records: serverRecords, record: serverRecords[0] }
-        : null);
+      if (serverRecords.length > 0) {
+        const record = serverRecords[0];
+        updateServerRecovery({
+          document: nextCurrent,
+          records: serverRecords,
+          record,
+          cleanupOnly: record.phase === 'committed',
+        });
+      } else {
+        updateServerRecovery(null);
+      }
       for (const record of committedRecords) {
         if (typeof record?.recoveryId === 'string') {
           void api.discardRecovery(nextCurrent.path, record.recoveryId).catch(() => {});
@@ -1662,7 +1714,7 @@ export default function App() {
           const serverState = serverStateResult.status === 'fulfilled'
             ? serverStateResult.value
             : null;
-          const records = actionableServerRecoveryRecords(serverState);
+          const records = recoveryRecordsForUI(serverState, envRef.current);
           const fileState = fileStateResult.status === 'fulfilled'
             ? fileStateResult.value
             : null;
@@ -1708,13 +1760,19 @@ export default function App() {
               diskReadable: false,
               diskError: err.message,
             } : null);
-            updateServerRecovery(records.length > 0 ? {
-              document: recoveryDocument,
-              records,
-              record: records[0],
-              diskReadable: false,
-              metadataUnavailable: fileState === null,
-            } : null);
+            if (records.length > 0) {
+              const record = records[0];
+              updateServerRecovery({
+                document: recoveryDocument,
+                records,
+                record,
+                cleanupOnly: record.phase === 'committed',
+                diskReadable: false,
+                metadataUnavailable: fileState === null,
+              });
+            } else {
+              updateServerRecovery(null);
+            }
             setViewMode('preview');
             setSaveNotice(records.length > 0
               ? fileState
@@ -1974,6 +2032,17 @@ export default function App() {
     }
   }, [openFileWithGuard]);
 
+  useEffect(() => {
+    const openFileFromMenu = () => void onOpenStandaloneFile();
+    const openFolderFromMenu = () => void onOpenFolder();
+    window.addEventListener('flux-reader:open-file', openFileFromMenu);
+    window.addEventListener('flux-reader:open-folder', openFolderFromMenu);
+    return () => {
+      window.removeEventListener('flux-reader:open-file', openFileFromMenu);
+      window.removeEventListener('flux-reader:open-folder', openFolderFromMenu);
+    };
+  }, [onOpenFolder, onOpenStandaloneFile]);
+
   const closeWorkspace = useCallback((rawPath) => {
     const path = normalizeWorkspacePath(rawPath);
     if (!path) return;
@@ -2164,12 +2233,14 @@ export default function App() {
         }
       }
 
-      const stateRecoveryRecords = actionableServerRecoveryRecords(fileState.recovery);
+      const stateRecoveryRecords = recoveryRecordsForUI(fileState.recovery, envRef.current);
       if (stateRecoveryRecords.length > 0) {
+        const record = stateRecoveryRecords[0];
         updateServerRecovery({
           document: currentRef.current,
           records: stateRecoveryRecords,
-          record: stateRecoveryRecords[0],
+          record,
+          cleanupOnly: record.phase === 'committed',
         });
         return;
       }
@@ -2436,14 +2507,62 @@ export default function App() {
 
     let focusTimerId = null;
     let pollTimerId = null;
+    let fileChangeTimerId = null;
+    let fileChangePending = false;
+    let stopFileWatching = null;
     let active = true;
+
+    const refreshIsBlocked = () => (
+      pollInFlightRef.current ||
+      pickerActiveRef.current ||
+      transitionPromptRef.current ||
+      conflictRef.current ||
+      recoveryRef.current ||
+      serverRecoveryRef.current
+    );
+
+    const scheduleFileChangeRefresh = (delay = FILE_CHANGE_REFRESH_DELAY_MS) => {
+      fileChangePending = true;
+      if (fileChangeTimerId !== null || !active) return;
+      fileChangeTimerId = window.setTimeout(async () => {
+        fileChangeTimerId = null;
+        if (!active) return;
+        if (document.visibilityState === 'hidden') return;
+        if (refreshIsBlocked()) {
+          scheduleFileChangeRefresh(FILE_CHANGE_BLOCKED_RETRY_MS);
+          return;
+        }
+        fileChangePending = false;
+        await runRefreshCycle({ forceWorkspaces: true });
+        if (fileChangePending) scheduleFileChangeRefresh();
+      }, delay);
+    };
+
+    const handleNativeFileChange = () => {
+      const selected = currentRef.current;
+      if (selected?.path) {
+        // 原生事件不携带私有路径。即使单文件授权无法查询父目录状态，也要让图片 URL
+        // 立即失效，避免 WebView2 继续复用变更前的本地资源。
+        const resourceRevision = `file-event:${++resourceRevisionRef.current}`;
+        currentRef.current = { ...selected, resourceRevision };
+        setCurrent((previous) => (
+          previous?.path === selected.path
+            ? { ...previous, resourceRevision }
+            : previous
+        ));
+      }
+      scheduleFileChangeRefresh();
+    };
 
     const scheduleFocusRefresh = () => {
       if (document.visibilityState === 'hidden' || pickerActiveRef.current) return;
       if (focusTimerId !== null) window.clearTimeout(focusTimerId);
       focusTimerId = window.setTimeout(() => {
         focusTimerId = null;
-        void runRefreshCycle({ forceWorkspaces: true });
+        fileChangePending = false;
+        void runRefreshCycle({ forceWorkspaces: true }).finally(() => {
+          if (fileChangePending) scheduleFileChangeRefresh();
+        });
       }, FOCUS_REFRESH_DELAY_MS);
     };
 
@@ -2457,13 +2576,27 @@ export default function App() {
 
     window.addEventListener('focus', scheduleFocusRefresh);
     document.addEventListener('visibilitychange', scheduleFocusRefresh);
-    schedulePoll();
+    if (env.capabilities?.fileWatching === true) {
+      void api.subscribeFileChanges(handleNativeFileChange).then((unsubscribe) => {
+        if (!active) {
+          void Promise.resolve(unsubscribe?.()).catch(() => {});
+          return;
+        }
+        stopFileWatching = unsubscribe;
+      }).catch((err) => {
+        if (active) setError(err.message);
+      });
+    } else {
+      schedulePoll();
+    }
     return () => {
       active = false;
       window.removeEventListener('focus', scheduleFocusRefresh);
       document.removeEventListener('visibilitychange', scheduleFocusRefresh);
+      void Promise.resolve(stopFileWatching?.()).catch(() => {});
       if (focusTimerId !== null) window.clearTimeout(focusTimerId);
       if (pollTimerId !== null) window.clearTimeout(pollTimerId);
+      if (fileChangeTimerId !== null) window.clearTimeout(fileChangeTimerId);
     };
   }, [env, runRefreshCycle]);
 
@@ -2604,8 +2737,8 @@ export default function App() {
                 type="button"
                 className={isDirty ? 'primary-btn' : undefined}
                 onClick={() => void saveCurrent()}
-                disabled={!isDirty || saving || current?.writable === false}
-                title="保存（⌘/Ctrl+S）"
+                disabled={!isDirty || saving || current?.writable === false || !safeSaveAvailable}
+                title={safeSaveAvailable ? '保存（⌘/Ctrl+S）' : '当前平台尚未启用安全保存'}
               >
                 {saving ? '保存中…' : '保存'}
               </button>
@@ -2617,7 +2750,9 @@ export default function App() {
               className={!hasDocument && workspaces.length === 0 ? 'primary-btn' : undefined}
               onClick={onOpenStandaloneFile}
               disabled={pickingFile || pickingFolder}
-              title="直接选择一个已在应用设置中授权的 Markdown 文件"
+              title={sessionScopedAuthorization
+                ? '选择一个 Markdown 文件并授权本次会话访问'
+                : '直接选择一个已在应用设置中授权的 Markdown 文件'}
             >
               {pickingFile ? '选择中…' : '打开文件'}
             </button>
@@ -2627,7 +2762,9 @@ export default function App() {
               type="button"
               onClick={onOpenFolder}
               disabled={pickingFolder || pickingFile}
-              title={`选择已授权文件夹（最多 ${MAX_WORKSPACES} 个工作区）`}
+              title={sessionScopedAuthorization
+                ? `选择文件夹并授权本次会话访问（最多 ${MAX_WORKSPACES} 个工作区）`
+                : `选择已授权文件夹（最多 ${MAX_WORKSPACES} 个工作区）`}
             >
               {pickingFolder ? '选择中…' : '打开文件夹'}
             </button>
@@ -2721,8 +2858,19 @@ export default function App() {
 
           {hasDocument && current?.writable === false && !error && (
             <div className="notice" role="status">
-              当前文稿只读。如需编辑，请在 fnOS「系统设置 → 应用 → Flux Reader →
-              访问权限」中将目录调整为读写。
+              {sessionScopedAuthorization
+                ? '当前文稿只读。如需编辑，请在 Windows 文件属性或安全设置中授予写入权限。'
+                : (
+                  <>当前文稿只读。如需编辑，请在 fnOS「系统设置 → 应用 → Flux Reader →
+                    访问权限」中将目录调整为读写。</>
+                )}
+            </div>
+          )}
+
+          {hasDocument && !safeSaveAvailable && !error && current?.writable !== false && (
+            <div className="notice" role="status">
+              当前平台尚未启用安全保存；可以阅读和编辑，修改会进入现有恢复草稿，
+              但暂不能提交到原文件。
             </div>
           )}
 

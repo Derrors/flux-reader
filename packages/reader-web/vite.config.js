@@ -50,13 +50,15 @@ function backendPlugin() {
 
 export default defineConfig(({ mode }) => {
   const isMacOSBuild = mode === 'macos' || mode === 'contract-macos';
+  const isWindowsBuild = mode === 'windows';
+  const isDesktopBuild = isMacOSBuild || isWindowsBuild;
   const isContractBuild = mode === 'contract-fnos' || mode === 'contract-macos';
 
   return {
-    // macOS 通过 App 内的自定义 URL scheme 加载 Bundle 资源；相对路径让产物
-    // 同时保持可移植，并把访问范围限制在 Reader 子目录。
-    base: isMacOSBuild ? './' : BASE,
-    plugins: [react(), !isMacOSBuild && backendPlugin()].filter(Boolean),
+    // 桌面端从应用包内加载静态资源；相对路径让 macOS 自定义 scheme 与
+    // Tauri WebView2 共用同一套分包策略。
+    base: isDesktopBuild ? './' : BASE,
+    plugins: [react(), !isDesktopBuild && backendPlugin()].filter(Boolean),
     // shiki worker 内部会做代码分割（按需加载语法定义），
     // 默认的 iife 格式不支持分包，必须用 es。
     worker: {
@@ -65,11 +67,14 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: isContractBuild
         ? (isMacOSBuild ? 'dist-contract-macos' : 'dist-contract-fnos')
-        : (isMacOSBuild ? 'dist-macos' : 'dist'),
+        : (isMacOSBuild ? 'dist-macos' : isWindowsBuild ? 'dist-windows' : 'dist'),
       emptyOutDir: true,
       // macOS 只打包渲染核心，不引入 fnOS 应用外壳和 API。
       rollupOptions: {
-        input: resolve(__dirname, isMacOSBuild ? 'macos.html' : 'index.html'),
+        input: resolve(
+          __dirname,
+          isMacOSBuild ? 'macos.html' : isWindowsBuild ? 'windows.html' : 'index.html',
+        ),
         output: {
           manualChunks(id) {
             if (id.includes('mermaid')) return 'markdown-mermaid';

@@ -1,189 +1,59 @@
-/** 后端接口封装。路径与 Vite base 保持一致，便于本地与线上共用。 */
-const BASE = '/app/flux-reader/api';
+import { transport as platformTransport } from './platform/transport';
 
-async function get(path, params, { signal } = {}) {
-  const url = new URL(`${BASE}${path}`, window.location.origin);
-  if (params) {
-    Object.entries(params).forEach(([k, v]) => {
-      if (Array.isArray(v)) {
-        v.forEach((item) => {
-          if (item != null) url.searchParams.append(k, String(item));
-        });
-      } else if (v != null) {
-        url.searchParams.set(k, String(v));
-      }
-    });
-  }
-  const fetchOptions = { credentials: 'same-origin' };
-  if (signal) fetchOptions.signal = signal;
-  const res = await fetch(url, fetchOptions);
-  const text = await res.text();
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(`接口返回非 JSON (HTTP ${res.status})`);
-  }
-  if (!res.ok) {
-    const err = new Error(data.message || `请求失败 (HTTP ${res.status})`);
-    err.code = data.error;
-    err.status = res.status;
-    err.details = data;
-    throw err;
-  }
-  return data;
-}
+const REQUIRED_TRANSPORT_METHODS = ['get', 'put', 'post', 'delete'];
 
-async function put(path, body, { signal } = {}) {
-  const url = new URL(`${BASE}${path}`, window.location.origin);
-  const fetchOptions = {
-    method: 'PUT',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  };
-  if (signal) fetchOptions.signal = signal;
-  const res = await fetch(url, fetchOptions);
-  const text = await res.text();
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(`接口返回非 JSON (HTTP ${res.status})`);
+/** 后端接口封装；业务端点只依赖 transport，不感知 HTTP 或 Tauri IPC。 */
+export function createApi(transport) {
+  for (const method of REQUIRED_TRANSPORT_METHODS) {
+    if (typeof transport?.[method] !== 'function') {
+      throw new TypeError(`transport.${method} 必须是函数`);
+    }
   }
-  if (!res.ok) {
-    const err = new Error(data.message || `请求失败 (HTTP ${res.status})`);
-    err.code = data.error;
-    err.status = res.status;
-    err.details = data;
-    throw err;
-  }
-  return data;
-}
 
-async function post(path, body, { signal } = {}) {
-  const url = new URL(`${BASE}${path}`, window.location.origin);
-  const fetchOptions = {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  };
-  if (signal) fetchOptions.signal = signal;
-  const res = await fetch(url, fetchOptions);
-  const text = await res.text();
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(`接口返回非 JSON (HTTP ${res.status})`);
-  }
-  if (!res.ok) {
-    const err = new Error(data.message || `请求失败 (HTTP ${res.status})`);
-    err.code = data.error;
-    err.status = res.status;
-    err.details = data;
-    throw err;
-  }
-  return data;
-}
-
-async function del(path, params, { signal } = {}) {
-  const url = new URL(`${BASE}${path}`, window.location.origin);
-  if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      if (value != null) url.searchParams.set(key, String(value));
-    });
-  }
-  const fetchOptions = {
-    method: 'DELETE',
-    credentials: 'same-origin',
-  };
-  if (signal) fetchOptions.signal = signal;
-  const res = await fetch(url, fetchOptions);
-  const text = await res.text();
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(`接口返回非 JSON (HTTP ${res.status})`);
-  }
-  if (!res.ok) {
-    const err = new Error(data.message || `请求失败 (HTTP ${res.status})`);
-    err.code = data.error;
-    err.status = res.status;
-    err.details = data;
-    throw err;
-  }
-  return data;
-}
-
-function resourceUrl(documentPath, resourcePath, workspacePath, revision) {
-  const document = typeof documentPath === 'string' ? documentPath : '';
-  const resource = String(resourcePath || '').trim();
-  const workspace = typeof workspacePath === 'string' ? workspacePath : '';
-
-  if (
-    !document.startsWith('/') ||
-    document.includes('\0') ||
-    !/\.(?:md|markdown|mdx)$/i.test(document)
-  ) return null;
-  if (
-    !resource ||
-    resource.startsWith('//') ||
-    resource.includes('\\') ||
-    resource.includes('\0') ||
-    /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(resource)
-  ) {
-    return null;
-  }
-  if (workspace && (!workspace.startsWith('/') || workspace.includes('\0'))) return null;
-
-  const url = new URL(`${BASE}/resource`, window.location.origin);
-  url.searchParams.set('document', document);
-  url.searchParams.set('path', resource);
-  if (workspace) url.searchParams.set('workspace', workspace);
-  // Cache-Control: no-store is the server-side guarantee. The opaque file
-  // revision also makes the DOM URL change when an image is replaced in place.
-  if (revision != null && String(revision)) url.searchParams.set('v', String(revision));
-  return `${url.pathname}${url.search}`;
-}
-
-export const api = {
-  env: () => get('/env'),
-  list: (path, options) => get('/list', { path }, options),
-  file: (path, options) => get('/file', { path }, options),
-  saveFile: (path, content, expectedRevision, options) => put('/file', {
-    path,
-    content,
-    expectedRevision,
-  }, options),
-  recoveryState: (path, options) => get('/file-recovery', { path }, options),
-  recoveryVersion: (path, recoveryId, version, options) => get('/file-recovery', {
-    path,
-    recoveryId,
-    version,
-  }, options),
-  commitRecovery: (path, recoveryId, version, expectedRevision, options) => post(
-    '/file-recovery/commit',
-    {
+  return {
+    env: () => transport.get('/env'),
+    list: (path, options) => transport.get('/list', { path }, options),
+    file: (path, options) => transport.get('/file', { path }, options),
+    saveFile: (path, content, expectedRevision, options) => transport.put('/file', {
+      path,
+      content,
+      expectedRevision,
+    }, options),
+    recoveryState: (path, options) => transport.get('/file-recovery', { path }, options),
+    recoveryVersion: (path, recoveryId, version, options) => transport.get('/file-recovery', {
       path,
       recoveryId,
       version,
-      expectedRevision,
+    }, options),
+    commitRecovery: (path, recoveryId, version, expectedRevision, options) => transport.post(
+      '/file-recovery/commit',
+      {
+        path,
+        recoveryId,
+        version,
+        expectedRevision,
+      },
+      options,
+    ),
+    discardRecovery: (path, recoveryId, options) => transport.delete('/file-recovery', {
+      path,
+      recoveryId,
+    }, options),
+    fileState: (path, options) => transport.get('/file-state', { path }, options),
+    search: (paths, query, limit = 100, options) => transport.get('/search', {
+      path: Array.isArray(paths) ? paths : [paths],
+      q: query,
+      limit,
+    }, options),
+    workspaceState: (path) => transport.get('/workspace-state', { path }),
+    resourceUrl: (...args) => transport.resourceUrl?.(...args) ?? null,
+    subscribeFileChanges: (listener) => {
+      if (typeof transport.subscribeFileChanges !== 'function') {
+        return Promise.reject(new Error('当前 transport 不支持文件变更事件'));
+      }
+      return transport.subscribeFileChanges(listener);
     },
-    options,
-  ),
-  discardRecovery: (path, recoveryId, options) => del('/file-recovery', {
-    path,
-    recoveryId,
-  }, options),
-  fileState: (path, options) => get('/file-state', { path }, options),
-  search: (paths, query, limit = 100, options) => get('/search', {
-    path: Array.isArray(paths) ? paths : [paths],
-    q: query,
-    limit,
-  }, options),
-  workspaceState: (path) => get('/workspace-state', { path }),
-  resourceUrl,
-};
+  };
+}
+
+export const api = createApi(platformTransport);

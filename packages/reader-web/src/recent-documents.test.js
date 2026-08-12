@@ -43,6 +43,13 @@ describe('最近文稿持久化', () => {
     expect(normalizeRecentDocument(recent('/share/good.md\0evil'))).toBeNull();
   });
 
+  it('保留 Tauri bridge 返回的 Windows 规范路径', () => {
+    expect(normalizeRecentDocument(recent('C:/Users/Alice/Notes/a.md'))).toMatchObject({
+      path: 'C:/Users/Alice/Notes/a.md',
+      name: 'a.md',
+    });
+  });
+
   it('读取时过滤篡改和重复项，并限制为 12 条', () => {
     const key = recentStorageKey('user-a');
     const stored = memoryStorage({

@@ -1,3 +1,5 @@
+import { basenameHostPath, isAbsoluteHostPath } from './platform/path';
+
 const STORAGE_PREFIX = 'flux-reader.document-session.v1';
 export const MAX_DOCUMENT_TABS = 12;
 
@@ -21,12 +23,11 @@ export function documentSessionStorageKey(uid) {
 function normalizeTab(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const path = typeof value.path === 'string' ? value.path : '';
-  if (!path.startsWith('/') || path.includes('\0') || !MARKDOWN_PATH.test(path)) return null;
-  const actualPath = typeof value.actualPath === 'string' && value.actualPath.startsWith('/')
-    && !value.actualPath.includes('\0')
+  if (!isAbsoluteHostPath(path) || path.includes('\0') || !MARKDOWN_PATH.test(path)) return null;
+  const actualPath = isAbsoluteHostPath(value.actualPath) && !value.actualPath.includes('\0')
     ? value.actualPath
     : null;
-  const fallbackName = path.split('/').filter(Boolean).pop() || path;
+  const fallbackName = basenameHostPath(path);
   const name = typeof value.name === 'string' && value.name.trim()
     ? value.name.trim().slice(0, 512)
     : fallbackName;
