@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fnosRoot = path.join(packageRoot, 'dist-contract-fnos');
 const macosRoot = path.join(packageRoot, 'dist-contract-macos');
+const devToolsCommandTimeoutMilliseconds = 10_000;
+const devToolsStartupTimeoutMilliseconds = 30_000;
 const manifest = JSON.parse(await readFile(
   path.join(packageRoot, 'test/fixtures/render-contract/manifest.json'),
   'utf8',
@@ -148,14 +150,19 @@ class DevToolsPipe {
     }
   }
 
-  send(method, params = {}, sessionId) {
+  send(
+    method,
+    params = {},
+    sessionId,
+    timeoutMilliseconds = devToolsCommandTimeoutMilliseconds,
+  ) {
     const id = ++this.sequence;
     const message = { id, method, params, ...(sessionId ? { sessionId } : {}) };
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`DevTools command timed out: ${method}`));
-      }, 10_000);
+      }, timeoutMilliseconds);
       this.pending.set(id, {
         resolve(value) {
           clearTimeout(timeout);
@@ -260,6 +267,16 @@ let exitCode = 0;
 try {
   console.log('Starting Chromium DevTools pipe…');
   const cdp = new DevToolsPipe(chrome);
+  // Hosted Linux runners can take longer than an ordinary CDP command to
+  // finish Chromium's cold start. Wait for an explicit browser response
+  // before creating the test page, while keeping all later commands on the
+  // stricter default timeout so real hangs still fail quickly.
+  await cdp.send(
+    'Browser.getVersion',
+    {},
+    undefined,
+    devToolsStartupTimeoutMilliseconds,
+  );
   const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp.send('Target.attachToTarget', {
     targetId,

@@ -64,4 +64,15 @@ describe('文稿标签会话持久化', () => {
     expect(new Set(session.tabs.map((tab) => tab.path)).size).toBe(MAX_DOCUMENT_TABS);
     expect(session.activeId).toBe('/share/2.md');
   });
+
+  it('Windows 盘符路径可恢复且仍只保存惰性元数据', () => {
+    const storage = memoryStorage();
+    const path = 'C:/Users/Alice/Notes/a.md';
+    expect(writeDocumentSession('windows-local', [{ path, actualPath: path }], path, storage))
+      .toBe(true);
+    expect(readDocumentSession('windows-local', storage)).toMatchObject({
+      activeId: path,
+      tabs: [{ id: path, path, actualPath: path }],
+    });
+  });
 });

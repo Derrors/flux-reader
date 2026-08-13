@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  为 fnOS 与 macOS 打造的本地优先 Markdown 阅读与编辑器。
+  为 fnOS、macOS 与 Windows 打造的本地优先 Markdown 阅读与编辑器。
   <br>
   从快速阅读，到多文档编辑、查找替换与安全恢复，都在一个干净的工作空间里完成。
 </p>
@@ -32,19 +32,19 @@ Flux Reader 不只是渲染 Markdown。它可以管理文件夹、搜索文稿�
 - **同时处理多份文稿**：最多 12 个标签页，清楚显示未保存状态并恢复上次会话。
 - **管理你的知识目录**：打开多个工作区，浏览目录树，按文件名与正文全文搜索。
 - **保护每一次修改**：草稿恢复、外部修改检测、安全保存和可选择的恢复版本。
-- **适应你的环境**：浅色、深色与系统外观，fnOS 和 macOS 共享一致的渲染体验。
+- **适应你的环境**：浅色、深色与系统外观，fnOS、macOS 和 Windows 共享一致的渲染体验。
 
 ## 平台支持
 
-| | fnOS | macOS |
-|---|---|---|
-| 应用形态 | 原生 fnOS 应用包 | SwiftUI 原生应用 |
-| 打开方式 | 文件、文件夹、文件关联 | 文件、文件夹、Finder 关联、拖放 |
-| 工作区 | 最多 8 个会话工作区 | 最多 8 个持久工作区 |
-| 文稿标签 | 最多 12 个，可恢复会话 | 最多 12 个，可恢复会话与草稿 |
-| 编辑与保存 | 保存已授权的现有文件 | 原位保存与另存为 |
-| 文件变化 | 自动轮询更新 | FSEvents 自动更新 |
-| 访问控制 | fnOS 应用授权 + 当前用户 ACL | App Sandbox + Security-scoped bookmarks |
+| | fnOS | macOS | Windows |
+|---|---|---|---|
+| 应用形态 | 原生 fnOS 应用包 | SwiftUI 原生应用 | Tauri 2 + WebView2 |
+| 打开方式 | 文件、文件夹、文件关联 | 文件、文件夹、Finder 关联、拖放 | 原生选择文件或文件夹 |
+| 工作区 | 最多 8 个会话工作区 | 最多 8 个持久工作区 | 最多 8 个会话工作区 |
+| 文稿标签 | 最多 12 个，可恢复会话 | 最多 12 个，可恢复会话与草稿 | 最多 12 个，可恢复会话与草稿 |
+| 编辑与保存 | 保存已授权的现有文件 | 原位保存与另存为 | 原子替换与显式恢复 sidecar |
+| 文件变化 | 自动轮询更新 | FSEvents 自动更新 | ReadDirectoryChangesW 原生事件 |
+| 访问控制 | fnOS 应用授权 + 当前用户 ACL | App Sandbox + Security-scoped bookmarks | 原生选择器的 WebView 会话授权 |
 
 支持 `.md`、`.markdown` 和 `.mdx` 文件；单份可编辑文稿上限为 10 MiB，文本编码需要为 UTF-8。
 
@@ -86,8 +86,9 @@ macOS 客户端要求 **macOS 14 或更高版本**，同时支持 Apple Silicon 
 
 ## 数据与安全
 
-Flux Reader 直接读取你选择的 Mac 文件或 fnOS 授权目录，不会要求把文稿上传到第三方
-服务。fnOS 会同时检查应用授权范围和当前登录用户权限；macOS 使用系统沙盒与安全书签。
+Flux Reader 直接读取你在 Mac/Windows 选择的文件或 fnOS 授权目录，不会要求把文稿上传到
+第三方服务。fnOS 会同时检查应用授权范围和当前登录用户权限；macOS 使用系统沙盒与安全
+书签；Windows 只在当前 WebView 会话内授权原生选择器明确返回的文件或目录。
 保存前会检查磁盘版本，避免静默覆盖外部修改；未保存草稿和恢复版本用于处理意外退出或
 写入中断。
 
@@ -98,6 +99,7 @@ Flux Reader 直接读取你选择的 Mac 文件或 fnOS 授权目录，不会要
 
 - [技术架构、本地开发、测试与发布](docs/TECHNICAL.md)
 - [fnOS 平台说明](apps/fnos/README.md)
+- [Windows 平台说明（Tauri 开发中）](apps/windows/README.md)
 - [macOS 平台说明](apps/macos/README.md)
 - [共享 Web 阅读器说明](packages/reader-web/README.md)
 

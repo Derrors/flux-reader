@@ -29,6 +29,7 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       fpk_asset: ${{ steps.version.outputs.fpk_asset }}
       dmg_asset: ${{ steps.version.outputs.dmg_asset }}
+      windows_asset: ${{ steps.version.outputs.windows_asset }}
       release_state: ${{ steps.release.outputs.release_state }}
 
     steps:
@@ -63,6 +64,7 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           FPK_ASSET: ${{ steps.version.outputs.fpk_asset }}
           DMG_ASSET: ${{ steps.version.outputs.dmg_asset }}
+          WINDOWS_ASSET: ${{ steps.version.outputs.windows_asset }}
           RELEASE_MARKER: "<!-- flux-reader-release-workflow -->"
         run: |
           set -euo pipefail
@@ -95,7 +97,7 @@ jobs:
                 echo "$TAG 已发布但本地未找到对应 tag，拒绝继续。" >&2
                 exit 1
               fi
-              for asset in "$FPK_ASSET" "$DMG_ASSET" SHA256SUMS; do
+              for asset in "$FPK_ASSET" "$DMG_ASSET" "$WINDOWS_ASSET" SHA256SUMS; do
                 if ! jq -e --arg name "$asset" '.assets[] | select(.name == $name)' <<<"$release_json" >/dev/null; then
                   echo "$TAG 已发布但缺少资产 $asset；为避免覆盖公开资产，需人工处理。" >&2
                   exit 1
@@ -231,12 +233,97 @@ jobs:
           retention-days: 7
           overwrite: true
 
+  build-windows:
+    name: Build Windows NSIS EXE
+    needs: metadata
+    if: ${{ needs.metadata.outputs.release_state != 'complete' }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/reader-web/package-lock.json
+
+      # windows-latest 自带 rustup；与 Windows CI 使用同一 stable 工具链入口，
+      # 避免为 Release 引入额外的第三方 setup action。
+      - name: Set up Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Install shared reader dependencies
+        run: npm ci --prefix packages/reader-web --no-audit --no-fund
+
+      - name: Validate synchronized version
+        run: npm run version:check
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build and normalize Windows NSIS EXE
+        working-directory: apps/windows/src-tauri
+        env:
+          WINDOWS_ASSET: ${{ needs.metadata.outputs.windows_asset }}
+        run: |
+          set -euo pipefail
+
+          # 公开资产名明确标注 x64，因此在打包前拒绝意外的 runner 架构漂移。
+          rust_version="$(rustc -vV)"
+          if ! grep -q '^host: x86_64-pc-windows-msvc$' <<<"$rust_version"; then
+            echo "公开资产要求 x64 MSVC host，当前 rustc 信息如下：" >&2
+            echo "$rust_version" >&2
+            exit 1
+          fi
+          # working-directory 已是 src-tauri，Tauri 自动读取同目录 tauri.conf.json；
+          # --config 仅用于合并额外配置，这里无需传入。
+          cargo tauri build
+
+          # Tauri 会在 NSIS 文件名中加入产品名、版本与架构。Release 使用
+          # 稳定的跨版本命名契约，因此只依赖官方 bundle 目录并严格校验唯一产物。
+          shopt -s nullglob
+          installers=(target/release/bundle/nsis/*.exe)
+          if [[ "${#installers[@]}" -ne 1 ]]; then
+            echo "期望 Tauri 生成一个 NSIS EXE，实际为 ${#installers[@]} 个。" >&2
+            exit 1
+          fi
+
+          repository_root="$(cd ../../.. && pwd)"
+          mkdir -p "$repository_root/dist/release"
+          mv -- "${installers[0]}" "$repository_root/dist/release/$WINDOWS_ASSET"
+          test -s "$repository_root/dist/release/$WINDOWS_ASSET"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-windows-${{ github.run_id }}
+          path: dist/release/${{ needs.metadata.outputs.windows_asset }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
   publish:
     name: Publish GitHub Release
     needs:
       - metadata
       - build-fpk
       - build-dmg
+      - build-windows
     if: ${{ needs.metadata.outputs.release_state != 'complete' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -248,6 +335,7 @@ jobs:
       TAG: ${{ needs.metadata.outputs.tag }}
       FPK_ASSET: ${{ needs.metadata.outputs.fpk_asset }}
       DMG_ASSET: ${{ needs.metadata.outputs.dmg_asset }}
+      WINDOWS_ASSET: ${{ needs.metadata.outputs.windows_asset }}
       RELEASE_MARKER: "<!-- flux-reader-release-workflow -->"
 
     steps:
@@ -277,7 +365,8 @@ jobs:
           cd dist/release
           test -s "$FPK_ASSET"
           test -s "$DMG_ASSET"
-          sha256sum "$FPK_ASSET" "$DMG_ASSET" > SHA256SUMS
+          test -s "$WINDOWS_ASSET"
+          sha256sum "$FPK_ASSET" "$DMG_ASSET" "$WINDOWS_ASSET" > SHA256SUMS
           sha256sum --check --strict SHA256SUMS
 
       - name: Publish immutable version
@@ -300,7 +389,7 @@ jobs:
           release_json=""
           if release_json="$(gh release view "$TAG" --json isDraft,assets,body,targetCommitish 2>/dev/null)"; then
             if [[ "$(jq -r '.isDraft' <<<"$release_json")" == "false" ]]; then
-              for asset in "$FPK_ASSET" "$DMG_ASSET" SHA256SUMS; do
+              for asset in "$FPK_ASSET" "$DMG_ASSET" "$WINDOWS_ASSET" SHA256SUMS; do
                 if ! jq -e --arg name "$asset" '.assets[] | select(.name == $name)' <<<"$release_json" >/dev/null; then
                   echo "$TAG 已发布但缺少资产 $asset；拒绝覆盖公开 Release。" >&2
                   exit 1
@@ -322,6 +411,7 @@ jobs:
             gh release upload "$TAG" \
               "dist/release/$FPK_ASSET" \
               "dist/release/$DMG_ASSET" \
+              "dist/release/$WINDOWS_ASSET" \
               "dist/release/SHA256SUMS" \
               --clobber
             gh release edit "$TAG" --notes-file "$RELEASE_NOTES_FILE" --draft=false
@@ -329,6 +419,7 @@ jobs:
             gh release create "$TAG" \
               "dist/release/$FPK_ASSET" \
               "dist/release/$DMG_ASSET" \
+              "dist/release/$WINDOWS_ASSET" \
               "dist/release/SHA256SUMS" \
               --verify-tag \
               --title "Flux Reader $VERSION" \
@@ -337,6 +428,7 @@ jobs:
             gh release create "$TAG" \
               "dist/release/$FPK_ASSET" \
               "dist/release/$DMG_ASSET" \
+              "dist/release/$WINDOWS_ASSET" \
               "dist/release/SHA256SUMS" \
               --target "$GITHUB_SHA" \
               --title "Flux Reader $VERSION" \
@@ -348,6 +440,6 @@ jobs:
             echo "$TAG 仍处于草稿状态。" >&2
             exit 1
           fi
-          for asset in "$FPK_ASSET" "$DMG_ASSET" SHA256SUMS; do
+          for asset in "$FPK_ASSET" "$DMG_ASSET" "$WINDOWS_ASSET" SHA256SUMS; do
             jq -e --arg name "$asset" '.assets[] | select(.name == $name)' <<<"$release_json" >/dev/null
           done

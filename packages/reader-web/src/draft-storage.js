@@ -1,4 +1,5 @@
 import { MAX_EDITABLE_DOCUMENT_BYTES } from './limits';
+import { isAbsoluteHostPath } from './platform/path';
 
 const DRAFT_STORAGE_PREFIX = 'flux-reader:draft:v1';
 // JavaScript 字符数不会大于同一内容的 UTF-8 字节数，因此这个上限能容纳
@@ -14,7 +15,7 @@ function storage() {
 }
 
 export function draftStorageKey(uid, actualPath) {
-  if (uid == null || typeof actualPath !== 'string' || !actualPath.startsWith('/')) return null;
+  if (uid == null || !isAbsoluteHostPath(actualPath)) return null;
   return `${DRAFT_STORAGE_PREFIX}:${encodeURIComponent(String(uid))}:${encodeURIComponent(actualPath)}`;
 }
 

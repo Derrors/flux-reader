@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api } from './api';
+import { api, createApi } from './api';
 
 function response(body, { ok, status = 200 } = {}) {
   return {
@@ -18,6 +18,52 @@ afterEach(() => {
 });
 
 describe('api 请求契约', () => {
+  it('业务 API 只通过 transport 接口发起请求', async () => {
+    const transport = {
+      get: vi.fn().mockResolvedValue({}),
+      put: vi.fn().mockResolvedValue({}),
+      post: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue({}),
+      subscribeFileChanges: vi.fn().mockResolvedValue(() => {}),
+    };
+    const client = createApi(transport);
+    const controller = new AbortController();
+
+    await client.file('/share/docs/a.md', { signal: controller.signal });
+    await client.saveFile('/share/docs/a.md', '# A', 'a'.repeat(64));
+    await client.commitRecovery(
+      '/share/docs/a.md',
+      'b'.repeat(48),
+      'attempted',
+      'c'.repeat(64),
+    );
+    await client.discardRecovery('/share/docs/a.md', 'd'.repeat(48));
+    const listener = vi.fn();
+    await client.subscribeFileChanges(listener);
+
+    expect(transport.get).toHaveBeenCalledWith(
+      '/file',
+      { path: '/share/docs/a.md' },
+      { signal: controller.signal },
+    );
+    expect(transport.put).toHaveBeenCalledWith('/file', {
+      path: '/share/docs/a.md',
+      content: '# A',
+      expectedRevision: 'a'.repeat(64),
+    }, undefined);
+    expect(transport.post).toHaveBeenCalledWith('/file-recovery/commit', {
+      path: '/share/docs/a.md',
+      recoveryId: 'b'.repeat(48),
+      version: 'attempted',
+      expectedRevision: 'c'.repeat(64),
+    }, undefined);
+    expect(transport.delete).toHaveBeenCalledWith('/file-recovery', {
+      path: '/share/docs/a.md',
+      recoveryId: 'd'.repeat(48),
+    }, undefined);
+    expect(transport.subscribeFileChanges).toHaveBeenCalledWith(listener);
+  });
+
   it.each([
     ['env', () => api.env(), '/app/flux-reader/api/env', null],
     ['list', () => api.list('/share/docs'), '/app/flux-reader/api/list', '/share/docs'],

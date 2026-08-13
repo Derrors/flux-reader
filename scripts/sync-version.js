@@ -17,6 +17,8 @@ function readReleaseFiles(root) {
       'FluxReader.xcodeproj',
       'project.pbxproj'
     ),
+    windowsCargo: path.join(root, 'apps', 'windows', 'src-tauri', 'Cargo.toml'),
+    tauriConfig: path.join(root, 'apps', 'windows', 'src-tauri', 'tauri.conf.json'),
   };
 
   return {
@@ -24,6 +26,8 @@ function readReleaseFiles(root) {
     versionSource: fs.readFileSync(files.version, 'utf8'),
     manifestSource: fs.readFileSync(files.manifest, 'utf8'),
     xcodeProjectSource: fs.readFileSync(files.xcodeProject, 'utf8'),
+    windowsCargoSource: fs.readFileSync(files.windowsCargo, 'utf8'),
+    tauriConfigSource: fs.readFileSync(files.tauriConfig, 'utf8'),
   };
 }
 
@@ -51,10 +55,34 @@ function inspectVersionFields(sources) {
     throw new Error(`Xcode 工程必须包含两个 MARKETING_VERSION 字段，当前数量：${xcodeMatches.length}`);
   }
 
+  const cargoPackage = sources.windowsCargoSource.match(
+    /^\[package\][ \t]*$([\s\S]*?)(?=^\[[^\]]+\][ \t]*$|(?![\s\S]))/m
+  );
+  const cargoVersionMatches = cargoPackage
+    ? [...cargoPackage[1].matchAll(/^version = "([^"]+)"[ \t]*$/gm)]
+    : [];
+  if (cargoVersionMatches.length !== 1) {
+    throw new Error(
+      `Windows Cargo.toml [package] 必须且只能包含一个 version 字段，当前数量：${cargoVersionMatches.length}`
+    );
+  }
+
+  let tauriConfig;
+  try {
+    tauriConfig = JSON.parse(sources.tauriConfigSource);
+  } catch (error) {
+    throw new Error(`Windows tauri.conf.json 不是有效 JSON：${error.message}`);
+  }
+  if (typeof tauriConfig.version !== 'string') {
+    throw new Error('Windows tauri.conf.json 缺少字符串 version 字段');
+  }
+
   return {
     version,
     manifestVersion: manifestMatches[0][1],
     xcodeVersions: xcodeMatches.map((match) => match[1].trim()),
+    windowsCargoVersion: cargoVersionMatches[0][1],
+    tauriVersion: tauriConfig.version,
   };
 }
 
@@ -77,6 +105,12 @@ function syncVersion({ root = DEFAULT_ROOT, write = false } = {}) {
       mismatches.push(`Xcode MARKETING_VERSION[${index}]=${value}`);
     }
   });
+  if (fields.windowsCargoVersion !== fields.version) {
+    mismatches.push(`Windows Cargo=${fields.windowsCargoVersion}`);
+  }
+  if (fields.tauriVersion !== fields.version) {
+    mismatches.push(`Tauri config=${fields.tauriVersion}`);
+  }
 
   if (mismatches.length === 0) return fields.version;
 
@@ -94,14 +128,26 @@ function syncVersion({ root = DEFAULT_ROOT, write = false } = {}) {
     /^(\s*MARKETING_VERSION = )[^;]+;/gm,
     `$1${fields.version};`
   );
+  const nextWindowsCargo = sources.windowsCargoSource.replace(
+    /(^\[package\][ \t]*$[\s\S]*?^version = ")[^"]+("[ \t]*$)/m,
+    `$1${fields.version}$2`
+  );
+  const nextTauriConfig = sources.tauriConfigSource.replace(
+    /^(\s*"version"\s*:\s*")[^"]+("\s*,?\s*)$/m,
+    `$1${fields.version}$2`
+  );
 
   writeFileAtomically(sources.files.manifest, nextManifest);
   writeFileAtomically(sources.files.xcodeProject, nextXcodeProject);
+  writeFileAtomically(sources.files.windowsCargo, nextWindowsCargo);
+  writeFileAtomically(sources.files.tauriConfig, nextTauriConfig);
 
   const verified = inspectVersionFields(readReleaseFiles(root));
   if (
     verified.manifestVersion !== verified.version
     || verified.xcodeVersions.some((value) => value !== verified.version)
+    || verified.windowsCargoVersion !== verified.version
+    || verified.tauriVersion !== verified.version
   ) {
     throw new Error('版本同步后校验失败');
   }
@@ -115,6 +161,7 @@ function releaseMetadata(version) {
     fpkAsset: `flux-reader-${version}.fpk`,
     dmgAsset: `Flux-Reader-${version}-unnotarized-universal.dmg`,
     signedDmgAsset: `Flux-Reader-${version}-universal.dmg`,
+    windowsAsset: `flux-reader-${version}-windows-x64.exe`,
   };
 }
 
@@ -131,6 +178,7 @@ function appendGitHubOutputs(version) {
     `fpk_asset=${metadata.fpkAsset}`,
     `dmg_asset=${metadata.dmgAsset}`,
     `signed_dmg_asset=${metadata.signedDmgAsset}`,
+    `windows_asset=${metadata.windowsAsset}`,
   ];
   fs.appendFileSync(outputPath, `${lines.join('\n')}\n`);
 }

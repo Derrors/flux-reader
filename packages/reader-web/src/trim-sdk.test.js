@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
   instance: null,
@@ -20,6 +20,7 @@ async function loadSdkWrapper() {
 
 beforeEach(() => {
   vi.resetModules();
+  delete globalThis.__TAURI__;
   harness.construct.mockReset();
   harness.instance = {
     ready: vi.fn().mockResolvedValue(undefined),
@@ -29,7 +30,31 @@ beforeEach(() => {
   };
 });
 
+afterEach(() => {
+  delete globalThis.__TAURI__;
+});
+
 describe('trim-sdk 文件选择器封装', () => {
+  it('Tauri 环境直接使用原生选择器并接受规范化 Windows 路径', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'reader_pick_folder') return 'C:/Users/Alice/Notes';
+      if (command === 'reader_pick_markdown_file') return 'C:/Users/Alice/Notes/a.md';
+      return null;
+    });
+    globalThis.__TAURI__ = { core: { invoke } };
+    const { initSdk, pickFolder, pickMarkdownFile, setTitle } = await loadSdkWrapper();
+
+    await expect(initSdk()).resolves.toMatchObject({ error: null });
+    await expect(pickFolder()).resolves.toBe('C:/Users/Alice/Notes');
+    await expect(pickMarkdownFile()).resolves.toBe('C:/Users/Alice/Notes/a.md');
+    await expect(setTitle('a.md')).resolves.toBeUndefined();
+
+    expect(harness.construct).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenNthCalledWith(1, 'reader_pick_folder');
+    expect(invoke).toHaveBeenNthCalledWith(2, 'reader_pick_markdown_file');
+    expect(invoke).toHaveBeenNthCalledWith(3, 'reader_set_title', { title: 'a.md' });
+  });
+
   it('打开文件夹只选择一个目录，不改写带末尾空格的路径', async () => {
     harness.instance.pickFile.mockResolvedValueOnce(['/share/项目 ']);
     const { pickFolder } = await loadSdkWrapper();

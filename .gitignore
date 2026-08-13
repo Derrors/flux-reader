@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-macos/
+dist-windows/
 dist-contract-fnos/
 dist-contract-macos/
 build/
@@ -21,4 +22,6 @@ DerivedData/
 # app/server 由 scripts/build-fnos.js 生成；app/ui 是手工维护的入口配置，须提交
 apps/fnos/package/app/server/
 apps/fnos/package/target/
+apps/windows/src-tauri/target/
+apps/windows/src-tauri/gen/schemas/
 *.fpk

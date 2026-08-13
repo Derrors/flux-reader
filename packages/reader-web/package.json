@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:windows": "vite --mode windows",
     "build": "vite build",
     "build:macos": "vite build --mode macos",
+    "build:windows": "vite build --mode windows",
     "build:contract:fnos": "vite build --mode contract-fnos",
     "build:contract:macos": "vite build --mode contract-macos",
     "benchmark:render": "node --expose-gc scripts/benchmark-render.mjs",

@@ -1,3 +1,5 @@
+import { basenameHostPath, isAbsoluteHostPath } from './platform/path';
+
 const STORAGE_PREFIX = 'flux-reader.recent-documents.v1';
 export const MAX_RECENT_DOCUMENTS = 12;
 
@@ -35,9 +37,9 @@ export function normalizeRecentDocument(value) {
     return null;
   }
   const path = value.path;
-  if (!path.startsWith('/') || !MARKDOWN_PATH.test(path)) return null;
+  if (!isAbsoluteHostPath(path) || !MARKDOWN_PATH.test(path)) return null;
 
-  const fallbackName = path.split('/').filter(Boolean).pop() || path;
+  const fallbackName = basenameHostPath(path);
   const name = cleanText(value.name, 512) || fallbackName;
   const displayPath = cleanText(value.displayPath, 4096) || path;
   const openedAt = Number(value.openedAt);
