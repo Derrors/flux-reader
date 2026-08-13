@@ -98,7 +98,65 @@ function CloseIcon() {
   );
 }
 
-function MediaLightbox({ children, label, onClose, onDownload }) {
+function AlignLeftIcon() {
+  return (
+    <SvgIcon>
+      <path d="M4 6h10M4 10h16M4 14h12M4 18h16" />
+    </SvgIcon>
+  );
+}
+
+function AlignCenterIcon() {
+  return (
+    <SvgIcon>
+      <path d="M7 6h10M4 10h16M6 14h12M4 18h16" />
+    </SvgIcon>
+  );
+}
+
+function AlignRightIcon() {
+  return (
+    <SvgIcon>
+      <path d="M10 6h10M4 10h16M8 14h12M4 18h16" />
+    </SvgIcon>
+  );
+}
+
+const ALIGNMENT_OPTIONS = [
+  { value: 'left', label: '左对齐', icon: <AlignLeftIcon /> },
+  { value: 'center', label: '居中', icon: <AlignCenterIcon /> },
+  { value: 'right', label: '右对齐', icon: <AlignRightIcon /> },
+];
+
+function AlignmentControls({ alignment, label, onChange }) {
+  return (
+    <span className="media-alignment-controls" role="group" aria-label={`${label}对齐方式`}>
+      {ALIGNMENT_OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className="media-icon-button media-align-button"
+          onClick={() => onChange(option.value)}
+          aria-label={`${label}${option.label}`}
+          aria-pressed={alignment === option.value}
+          title={option.label}
+        >
+          {option.icon}
+        </button>
+      ))}
+    </span>
+  );
+}
+
+function MediaLightbox({
+  alignment,
+  alignable,
+  children,
+  label,
+  onAlignmentChange,
+  onClose,
+  onDownload,
+}) {
   const [zoom, setZoom] = useState(1);
   const closeButtonRef = useRef(null);
 
@@ -147,6 +205,13 @@ function MediaLightbox({ children, label, onClose, onDownload }) {
       }}
     >
       <div className="media-lightbox-toolbar" data-copy-ignore>
+        {alignable && (
+          <AlignmentControls
+            alignment={alignment}
+            label={label}
+            onChange={onAlignmentChange}
+          />
+        )}
         {onDownload && (
           <button
             type="button"
@@ -206,6 +271,7 @@ function MediaLightbox({ children, label, onClose, onDownload }) {
       >
         <div
           className="media-lightbox-content"
+          data-media-align={alignable ? alignment : undefined}
           style={{ width: `${zoom * 100}%` }}
         >
           {children}
@@ -221,9 +287,12 @@ function MediaLightbox({ children, label, onClose, onDownload }) {
  * 放大时把同一份内容移动到 portal，避免 Mermaid SVG 的 id 重复。
  */
 export default function MediaFrame({
+  alignable = false,
+  alignment = 'center',
   children,
   className = '',
   label = '媒体内容',
+  onAlignmentChange,
   onDownload,
   ...props
 }) {
@@ -300,12 +369,20 @@ export default function MediaFrame({
         style={inlineWidth == null ? undefined : { width: `${inlineWidth}px` }}
         data-resized={inlineWidth == null ? undefined : 'true'}
         {...props}
+        data-media-align={alignable ? alignment : undefined}
       >
         {expanded ? (
           <div className="media-inline-placeholder" style={{ height: placeholderHeight }} />
         ) : (
           <>
             <div className="media-toolbar" data-copy-ignore>
+              {alignable && (
+                <AlignmentControls
+                  alignment={alignment}
+                  label={label}
+                  onChange={onAlignmentChange}
+                />
+              )}
               <button
                 ref={expandButtonRef}
                 type="button"
@@ -355,7 +432,10 @@ export default function MediaFrame({
       </div>
       {expanded && (
         <MediaLightbox
+          alignment={alignment}
+          alignable={alignable}
           label={label}
+          onAlignmentChange={onAlignmentChange}
           onClose={closeExpanded}
           onDownload={onDownload}
         >
