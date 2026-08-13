@@ -18,6 +18,7 @@ function readReleaseFiles(root) {
       'project.pbxproj'
     ),
     windowsCargo: path.join(root, 'apps', 'windows', 'src-tauri', 'Cargo.toml'),
+    windowsCargoLock: path.join(root, 'apps', 'windows', 'src-tauri', 'Cargo.lock'),
     tauriConfig: path.join(root, 'apps', 'windows', 'src-tauri', 'tauri.conf.json'),
   };
 
@@ -27,8 +28,46 @@ function readReleaseFiles(root) {
     manifestSource: fs.readFileSync(files.manifest, 'utf8'),
     xcodeProjectSource: fs.readFileSync(files.xcodeProject, 'utf8'),
     windowsCargoSource: fs.readFileSync(files.windowsCargo, 'utf8'),
+    windowsCargoLockSource: fs.readFileSync(files.windowsCargoLock, 'utf8'),
     tauriConfigSource: fs.readFileSync(files.tauriConfig, 'utf8'),
   };
+}
+
+function findCargoLockPackage(source, packageName) {
+  const blocks = [
+    ...source.matchAll(
+      /^\[\[package\]\][ \t]*$(?:\r?\n|$)([\s\S]*?)(?=^\[\[package\]\][ \t]*$|(?![\s\S]))/gm
+    ),
+  ].filter((match) => {
+    const names = [...match[1].matchAll(/^name = "([^"]+)"[ \t]*$/gm)];
+    return names.length === 1 && names[0][1] === packageName;
+  });
+  if (blocks.length !== 1) {
+    throw new Error(
+      `Windows Cargo.lock 必须且只能包含一个 ${packageName} 包，当前数量：${blocks.length}`
+    );
+  }
+  const block = blocks[0];
+  const versions = [...block[1].matchAll(/^version = "([^"]+)"[ \t]*$/gm)];
+  if (versions.length !== 1) {
+    throw new Error(
+      `Windows Cargo.lock 的 ${packageName} 必须且只能包含一个 version 字段，当前数量：${versions.length}`
+    );
+  }
+  return {
+    start: block.index,
+    source: block[0],
+    version: versions[0][1],
+  };
+}
+
+function replaceCargoLockPackageVersion(source, packageName, version) {
+  const entry = findCargoLockPackage(source, packageName);
+  const nextEntry = entry.source.replace(
+    /^version = "[^"]+"[ \t]*$/m,
+    `version = "${version}"`
+  );
+  return `${source.slice(0, entry.start)}${nextEntry}${source.slice(entry.start + entry.source.length)}`;
 }
 
 function inspectVersionFields(sources) {
@@ -66,6 +105,10 @@ function inspectVersionFields(sources) {
       `Windows Cargo.toml [package] 必须且只能包含一个 version 字段，当前数量：${cargoVersionMatches.length}`
     );
   }
+  const cargoLockPackage = findCargoLockPackage(
+    sources.windowsCargoLockSource,
+    'flux-reader-windows'
+  );
 
   let tauriConfig;
   try {
@@ -82,6 +125,7 @@ function inspectVersionFields(sources) {
     manifestVersion: manifestMatches[0][1],
     xcodeVersions: xcodeMatches.map((match) => match[1].trim()),
     windowsCargoVersion: cargoVersionMatches[0][1],
+    windowsCargoLockVersion: cargoLockPackage.version,
     tauriVersion: tauriConfig.version,
   };
 }
@@ -108,6 +152,9 @@ function syncVersion({ root = DEFAULT_ROOT, write = false } = {}) {
   if (fields.windowsCargoVersion !== fields.version) {
     mismatches.push(`Windows Cargo=${fields.windowsCargoVersion}`);
   }
+  if (fields.windowsCargoLockVersion !== fields.version) {
+    mismatches.push(`Windows Cargo.lock=${fields.windowsCargoLockVersion}`);
+  }
   if (fields.tauriVersion !== fields.version) {
     mismatches.push(`Tauri config=${fields.tauriVersion}`);
   }
@@ -132,6 +179,11 @@ function syncVersion({ root = DEFAULT_ROOT, write = false } = {}) {
     /(^\[package\][ \t]*$[\s\S]*?^version = ")[^"]+("[ \t]*$)/m,
     `$1${fields.version}$2`
   );
+  const nextWindowsCargoLock = replaceCargoLockPackageVersion(
+    sources.windowsCargoLockSource,
+    'flux-reader-windows',
+    fields.version
+  );
   const nextTauriConfig = sources.tauriConfigSource.replace(
     /^(\s*"version"\s*:\s*")[^"]+("\s*,?\s*)$/m,
     `$1${fields.version}$2`
@@ -140,6 +192,7 @@ function syncVersion({ root = DEFAULT_ROOT, write = false } = {}) {
   writeFileAtomically(sources.files.manifest, nextManifest);
   writeFileAtomically(sources.files.xcodeProject, nextXcodeProject);
   writeFileAtomically(sources.files.windowsCargo, nextWindowsCargo);
+  writeFileAtomically(sources.files.windowsCargoLock, nextWindowsCargoLock);
   writeFileAtomically(sources.files.tauriConfig, nextTauriConfig);
 
   const verified = inspectVersionFields(readReleaseFiles(root));
@@ -147,6 +200,7 @@ function syncVersion({ root = DEFAULT_ROOT, write = false } = {}) {
     verified.manifestVersion !== verified.version
     || verified.xcodeVersions.some((value) => value !== verified.version)
     || verified.windowsCargoVersion !== verified.version
+    || verified.windowsCargoLockVersion !== verified.version
     || verified.tauriVersion !== verified.version
   ) {
     throw new Error('版本同步后校验失败');
