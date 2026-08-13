@@ -77,6 +77,61 @@ final class SplitScrollSynchronizerTests: XCTestCase {
 }
 
 final class WebRendererTests: XCTestCase {
+  @MainActor
+  func testScrollEventsOnlyUpdateTheDocumentGenerationAlreadyOnScreen() {
+    let current: [String: Any] = [
+      "kind": "user",
+      "generation": "generation-2",
+      "fraction": NSNumber(value: 0.4),
+    ]
+    let stale: [String: Any] = [
+      "kind": "user",
+      "generation": "generation-1",
+      "fraction": NSNumber(value: 0.8),
+    ]
+
+    XCTAssertEqual(
+      WebMarkdownView.Coordinator.userScrollFraction(
+        from: current,
+        presentedGeneration: "generation-2"
+      ),
+      0.4
+    )
+    XCTAssertNil(
+      WebMarkdownView.Coordinator.userScrollFraction(
+        from: stale,
+        presentedGeneration: "generation-2"
+      )
+    )
+  }
+
+  @MainActor
+  func testResourceTokenIsStableForTheSameDocumentRevision() {
+    let url = URL(fileURLWithPath: "/tmp/stable-resource-token.md")
+    let document = MarkdownDocument(
+      url: url,
+      content: "# First",
+      byteCount: 7,
+      modificationDate: nil
+    )
+
+    XCTAssertEqual(
+      WebMarkdownView.Coordinator.resourceToken(for: document),
+      WebMarkdownView.Coordinator.resourceToken(for: document.withContent("# Edited"))
+    )
+    XCTAssertNotEqual(
+      WebMarkdownView.Coordinator.resourceToken(for: document),
+      WebMarkdownView.Coordinator.resourceToken(
+        for: MarkdownDocument(
+          url: url,
+          content: "# Reloaded",
+          byteCount: 10,
+          modificationDate: nil
+        )
+      )
+    )
+  }
+
   func testRenderHandoffAcceptsOnlyCurrentGenerationOnce() {
     var tracker = RenderHandoffTracker()
     tracker.begin(generation: "generation-1")

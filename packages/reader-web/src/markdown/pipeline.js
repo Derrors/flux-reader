@@ -122,6 +122,15 @@ const pipelineDiagnostics = {
   sanitizeCount: 0,
 };
 
+export const MAX_MARKDOWN_SNAPSHOT_CACHE_ENTRIES = 12;
+export const MAX_MARKDOWN_SNAPSHOT_CACHE_BYTES = 48 * 1024 * 1024;
+export const MAX_MARKDOWN_SNAPSHOT_CACHE_ITEM_BYTES = 12 * 1024 * 1024;
+
+const markdownSnapshotCache = new Map();
+let markdownSnapshotCacheBytes = 0;
+let markdownSnapshotCacheHits = 0;
+let markdownSnapshotCacheMisses = 0;
+
 /* ------------------------------------------------------------------ *
  * 工具
  * ------------------------------------------------------------------ */
@@ -228,10 +237,71 @@ export function createMarkdownSnapshot(source) {
   const tokens = lexMarkdown(preprocess(normalizedSource));
   return Object.freeze({
     source: normalizedSource,
-    tokens,
     safeHtml: renderTokensToSafeHtml(tokens),
     toc: extractTocFromTokens(tokens),
   });
+}
+
+function snapshotBytes(snapshot) {
+  // JS 字符串通常按 UTF-16 存储；使用 2 bytes/字符作为保守、无额外大分配的估算。
+  const tocBytes = snapshot.toc.reduce(
+    (total, item) => total + (String(item.text || '').length + String(item.id || '').length) * 2 + 16,
+    0,
+  );
+  return (snapshot.source.length + snapshot.safeHtml.length) * 2 + tocBytes;
+}
+
+function evictMarkdownSnapshots() {
+  while (
+    markdownSnapshotCache.size > MAX_MARKDOWN_SNAPSHOT_CACHE_ENTRIES
+    || markdownSnapshotCacheBytes > MAX_MARKDOWN_SNAPSHOT_CACHE_BYTES
+  ) {
+    const oldestKey = markdownSnapshotCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const oldest = markdownSnapshotCache.get(oldestKey);
+    markdownSnapshotCache.delete(oldestKey);
+    markdownSnapshotCacheBytes -= oldest?.bytes || 0;
+  }
+}
+
+/**
+ * macOS 多标签预览使用的跨文稿 LRU。大文稿仍正常渲染，但不会常驻 WebContent 内存。
+ */
+export function getCachedMarkdownSnapshot(source) {
+  const normalizedSource = String(source || '');
+  const cached = markdownSnapshotCache.get(normalizedSource);
+  if (cached) {
+    markdownSnapshotCacheHits += 1;
+    markdownSnapshotCache.delete(normalizedSource);
+    markdownSnapshotCache.set(normalizedSource, cached);
+    return cached.snapshot;
+  }
+
+  markdownSnapshotCacheMisses += 1;
+  const snapshot = createMarkdownSnapshot(normalizedSource);
+  const bytes = snapshotBytes(snapshot);
+  if (bytes <= MAX_MARKDOWN_SNAPSHOT_CACHE_ITEM_BYTES) {
+    markdownSnapshotCache.set(normalizedSource, { snapshot, bytes });
+    markdownSnapshotCacheBytes += bytes;
+    evictMarkdownSnapshots();
+  }
+  return snapshot;
+}
+
+export function getMarkdownSnapshotCacheDiagnostics() {
+  return {
+    entries: markdownSnapshotCache.size,
+    bytes: markdownSnapshotCacheBytes,
+    hits: markdownSnapshotCacheHits,
+    misses: markdownSnapshotCacheMisses,
+  };
+}
+
+export function resetMarkdownSnapshotCache() {
+  markdownSnapshotCache.clear();
+  markdownSnapshotCacheBytes = 0;
+  markdownSnapshotCacheHits = 0;
+  markdownSnapshotCacheMisses = 0;
 }
 
 export function getMarkdownPipelineDiagnostics() {

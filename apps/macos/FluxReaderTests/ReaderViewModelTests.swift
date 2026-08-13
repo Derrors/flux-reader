@@ -289,6 +289,34 @@ final class ReaderViewModelTests: XCTestCase {
   }
 
   @MainActor
+  func testLoadingNewDocumentKeepsCurrentDocumentMountedUntilCommit() async throws {
+    let firstURL = temporaryDirectory.appendingPathComponent("first-stable.md")
+    let secondURL = temporaryDirectory.appendingPathComponent("second-delayed.md")
+    try Data("# First".utf8).write(to: firstURL)
+    try Data("# Second".utf8).write(to: secondURL)
+    let fileService = BlockingSecondLoadFileService()
+    let viewModel = ReaderViewModel(
+      fileService: fileService,
+      bookmarkStore: InMemoryBookmarkStore(),
+      workspaceWatcher: TestWorkspaceWatcher(),
+      draftRecoveryStore: InMemoryDraftRecoveryStore(),
+      documentSessionStore: InMemoryDocumentSessionStore()
+    )
+
+    viewModel.open(firstURL)
+    await waitUntil { viewModel.currentDocument?.url == firstURL.standardizedFileURL }
+    viewModel.open(secondURL)
+    await waitUntil { fileService.secondLoadStarted }
+
+    XCTAssertEqual(viewModel.currentDocument?.url, firstURL.standardizedFileURL)
+    XCTAssertEqual(viewModel.loadingDocumentName, secondURL.lastPathComponent)
+
+    fileService.finishSecondLoad()
+    await waitUntil { viewModel.currentDocument?.url == secondURL.standardizedFileURL }
+    XCTAssertNil(viewModel.loadingDocumentName)
+  }
+
+  @MainActor
   func testRetainedRecoveryVersionOpensReadOnlyAndCannotSaveInPlace() async throws {
     let sourceDirectory = temporaryDirectory.appendingPathComponent(
       "Documents",
@@ -508,7 +536,11 @@ final class ReaderViewModelTests: XCTestCase {
     XCTAssertTrue(viewModel.isEditing)
     XCTAssertTrue(viewModel.hasUnsavedChanges)
     XCTAssertTrue(viewModel.canSave)
+    // 纯编辑模式不再为隐藏的 Web 预览重复解析每次击键；切回预览时再原子刷新。
+    XCTAssertEqual(viewModel.previewDocument?.content, "# Original")
+    viewModel.setDocumentViewMode(.preview)
     XCTAssertEqual(viewModel.previewDocument?.content, updatedContent)
+    viewModel.setDocumentViewMode(.edit)
 
     viewModel.save()
     await waitUntil {
@@ -1454,6 +1486,50 @@ private final class BlockingFirstLoadFileService: FileAccessing, @unchecked Send
 
   func finishFirstLoad() {
     firstLoadGate.signal()
+  }
+}
+
+private final class BlockingSecondLoadFileService: FileAccessing, @unchecked Sendable {
+  private let base = LocalFileService()
+  private let lock = NSLock()
+  private let secondLoadGate = DispatchSemaphore(value: 0)
+  private var loadCount = 0
+  private var _secondLoadStarted = false
+
+  var secondLoadStarted: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return _secondLoadStarted
+  }
+
+  func loadDocument(at url: URL) throws -> MarkdownDocument {
+    lock.lock()
+    loadCount += 1
+    let shouldBlock = loadCount == 2
+    if shouldBlock { _secondLoadStarted = true }
+    lock.unlock()
+    if shouldBlock { secondLoadGate.wait() }
+    return try base.loadDocument(at: url)
+  }
+
+  func saveDocument(
+    content: String,
+    to url: URL,
+    expectedModificationDate: Date?,
+    expectedContent: String?,
+    expectedTargetExists: Bool
+  ) throws -> MarkdownDocument {
+    try base.saveDocument(
+      content: content,
+      to: url,
+      expectedModificationDate: expectedModificationDate,
+      expectedContent: expectedContent,
+      expectedTargetExists: expectedTargetExists
+    )
+  }
+
+  func finishSecondLoad() {
+    secondLoadGate.signal()
   }
 }
 

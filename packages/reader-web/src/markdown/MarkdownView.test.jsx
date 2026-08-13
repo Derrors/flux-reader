@@ -1,6 +1,13 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import MarkdownView from './MarkdownView';
+import MarkdownView, {
+  getParsedSnapshotCacheDiagnostics,
+  resetParsedSnapshotCache,
+} from './MarkdownView';
+import {
+  getCachedMarkdownSnapshot,
+  resetMarkdownSnapshotCache,
+} from './pipeline';
 
 describe('MarkdownView 图片资源', () => {
   it('只在提供解析器时保留相对图片', () => {
@@ -92,5 +99,27 @@ describe('MarkdownView 文档内查找', () => {
     expect(container.querySelector('[data-find-match="1"]')).toBe(secondBefore);
     expect(firstBefore).not.toHaveClass('is-active');
     expect(secondBefore).toHaveClass('is-active');
+  });
+});
+
+describe('MarkdownView 多标签缓存', () => {
+  it('返回已打开标签时复用解析后的 React 元素树', () => {
+    resetMarkdownSnapshotCache();
+    resetParsedSnapshotCache();
+    const firstSnapshot = getCachedMarkdownSnapshot('# First');
+    const secondSnapshot = getCachedMarkdownSnapshot('# Second');
+    const { rerender } = render(
+      <MarkdownView content="# First" snapshot={firstSnapshot} />,
+    );
+
+    rerender(<MarkdownView content="# Second" snapshot={secondSnapshot} />);
+    rerender(
+      <MarkdownView
+        content="# First"
+        snapshot={getCachedMarkdownSnapshot('# First')}
+      />,
+    );
+
+    expect(getParsedSnapshotCacheDiagnostics()).toEqual({ hits: 1, misses: 2 });
   });
 });

@@ -26,6 +26,22 @@ const MarkdownRuntimeContext = createContext({
   resolveImageSource: undefined,
 });
 
+// 与 pipeline 的 snapshot LRU 配合：同一 snapshot 返回标签时直接复用
+// html-react-parser 生成的不可变 React 元素树。WeakMap 不延长 snapshot 生命周期。
+let parsedSnapshotCache = new WeakMap();
+let parsedSnapshotCacheHits = 0;
+let parsedSnapshotCacheMisses = 0;
+
+export function getParsedSnapshotCacheDiagnostics() {
+  return { hits: parsedSnapshotCacheHits, misses: parsedSnapshotCacheMisses };
+}
+
+export function resetParsedSnapshotCache() {
+  parsedSnapshotCache = new WeakMap();
+  parsedSnapshotCacheHits = 0;
+  parsedSnapshotCacheMisses = 0;
+}
+
 /**
  * 图片编组：段落内连续多张图片排成网格，而非竖排堆叠。
  * 这里在 React 层判断，比在 AST 层实现更直接。
@@ -106,6 +122,16 @@ export default function MarkdownView({
 
   const renderResult = useMemo(() => {
     if (!html) return { content: null, matchCount: 0 };
+
+    const canReuseParsedTree = !findQuery;
+    if (canReuseParsedTree) {
+      const cached = parsedSnapshotCache.get(ownedSnapshot);
+      if (cached) {
+        parsedSnapshotCacheHits += 1;
+        return cached;
+      }
+      parsedSnapshotCacheMisses += 1;
+    }
 
     let matchIndex = 0;
     const normalizedQuery = findCaseSensitive ? findQuery : findQuery.toLocaleLowerCase();
@@ -193,11 +219,14 @@ export default function MarkdownView({
     };
 
     const parsed = parse(html, options);
-    return { content: parsed, matchCount: matchIndex };
+    const result = { content: parsed, matchCount: matchIndex };
+    if (canReuseParsedTree) parsedSnapshotCache.set(ownedSnapshot, result);
+    return result;
   }, [
     findCaseSensitive,
     findQuery,
     html,
+    ownedSnapshot,
   ]);
 
   useEffect(() => {

@@ -1,5 +1,5 @@
 appname="flux-reader"
-version="0.1.28"
+version="0.1.29"
 display_name="Flux Reader"
 desc="NAS 上的 Markdown 阅读器，支持 GFM 表格、代码高亮、数学公式与 Mermaid 图表"
 source="thirdparty"

@@ -60,8 +60,29 @@ final class FluxReaderUITests: XCTestCase {
     return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
   }
 
+  /// `NavigationSplitView` may restore the sidebar visibility from a previous
+  /// app session even when XCTest asks AppKit to ignore window restoration.
+  /// Tests that inspect workspace/sidebar controls must therefore reveal it
+  /// explicitly instead of depending on external UI state.
+  private func revealSidebarIfNeeded(
+    in app: XCUIApplication,
+    timeout: TimeInterval = 5
+  ) {
+    let showSidebar = app.buttons.matching(
+      NSPredicate(
+        format: "label == %@ OR label == %@",
+        "Show Sidebar",
+        "显示边栏"
+      )
+    ).firstMatch
+    guard showSidebar.waitForExistence(timeout: 1) else { return }
+    XCTAssertTrue(waitUntilHittable(showSidebar, timeout: timeout))
+    showSidebar.click()
+  }
+
   private func cancelInteraction(
     using cancelButton: XCUIElement,
+    dialog: XCUIElement,
     in app: XCUIApplication,
     timeout: TimeInterval = 5
   ) {
@@ -71,7 +92,7 @@ final class FluxReaderUITests: XCTestCase {
     } else {
       app.typeKey(.escape, modifierFlags: [])
     }
-    XCTAssertTrue(cancelButton.waitForNonExistence(timeout: timeout))
+    XCTAssertTrue(dialog.waitForNonExistence(timeout: timeout))
     XCTAssertTrue(app.wait(for: .runningForeground, timeout: timeout))
   }
 
@@ -79,6 +100,7 @@ final class FluxReaderUITests: XCTestCase {
     in app: XCUIApplication,
     timeout: TimeInterval = 8
   ) -> XCUIElement {
+    revealSidebarIfNeeded(in: app, timeout: timeout)
     let currentDocument = app.staticTexts["flux.current-document"]
     XCTAssertTrue(currentDocument.waitForExistence(timeout: timeout))
 
@@ -117,6 +139,7 @@ final class FluxReaderUITests: XCTestCase {
         .hasPrefix("isolated-") == true
     )
     app.launch()
+    revealSidebarIfNeeded(in: app)
 
     XCTAssertTrue(app.staticTexts["flux.empty-title"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.buttons["flux.open-file"].exists)
@@ -134,6 +157,7 @@ final class FluxReaderUITests: XCTestCase {
       clearsRecovery: true
     )
     app.launch()
+    revealSidebarIfNeeded(in: app)
 
     let currentDocument = app.staticTexts["flux.current-document"]
     XCTAssertTrue(currentDocument.waitForExistence(timeout: 8))
@@ -298,8 +322,9 @@ final class FluxReaderUITests: XCTestCase {
     )
     app.launchEnvironment["FLUX_READER_UI_TEST_SECOND_MARKDOWN"] = "# Second"
     app.launch()
+    revealSidebarIfNeeded(in: app)
 
-    let secondDocument = app.buttons["Second.md"]
+    let secondDocument = app.buttons["flux.workspace-document.Second.md"]
     XCTAssertTrue(secondDocument.waitForExistence(timeout: 10))
     let editor = enterEditMode(in: app)
     editor.click()
@@ -318,7 +343,7 @@ final class FluxReaderUITests: XCTestCase {
       )
     )
 
-    let firstDocument = app.buttons["FluxReaderUITest.md"]
+    let firstDocument = app.buttons["flux.tab.FluxReaderUITest.md"]
     XCTAssertTrue(waitUntilHittable(firstDocument, timeout: 5))
     firstDocument.click()
     XCTAssertTrue(
@@ -338,12 +363,16 @@ final class FluxReaderUITests: XCTestCase {
     )
 
     app.typeKey("q", modifierFlags: .command)
-    let quitCancelButton = app.dialogs.buttons["取消"]
-    cancelInteraction(using: quitCancelButton, in: app)
+    let quitDialog = app.dialogs.containing(.button, identifier: "不保存").firstMatch
+    XCTAssertTrue(quitDialog.waitForExistence(timeout: 5))
+    let quitCancelButton = quitDialog.buttons["取消"]
+    cancelInteraction(using: quitCancelButton, dialog: quitDialog, in: app)
     XCTAssertTrue(dirtyIndicator.waitForExistence(timeout: 5))
 
     app.typeKey("q", modifierFlags: .command)
-    let discardButton = app.dialogs.buttons["不保存"]
+    let discardDialog = app.dialogs.containing(.button, identifier: "不保存").firstMatch
+    XCTAssertTrue(discardDialog.waitForExistence(timeout: 5))
+    let discardButton = discardDialog.buttons["不保存"]
     XCTAssertTrue(waitUntilHittable(discardButton, timeout: 5))
     discardButton.click()
     XCTAssertTrue(app.wait(for: .notRunning, timeout: 8))

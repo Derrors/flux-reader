@@ -13,6 +13,9 @@ vi.mock('./markdown/MarkdownView', () => ({
     >
       <h1 id="first">First</h1>
       {content.includes('## Second') && <h2 id="second">Second</h2>}
+      {content.includes('[deferred]') && (
+        <div data-testid="deferred-code" data-render-state="deferred" />
+      )}
     </article>
   ),
 }));
@@ -117,6 +120,10 @@ describe('macOS 文档目录', () => {
       },
     };
     render(<MacOSRenderer />);
+    globalThis.fluxReader.render(renderState('# First'));
+    await screen.findByTestId('markdown-view');
+    await waitFor(() => expect(contentDidPaint).toHaveBeenCalled());
+    contentDidPaint.mockClear();
 
     const scrollElement = document.querySelector('.macos-renderer-scroll');
     Object.defineProperties(scrollElement, {
@@ -132,7 +139,11 @@ describe('macOS 文档目录', () => {
     scrollElement.scrollTop = 400;
     fireEvent.scroll(scrollElement);
     await waitFor(() => {
-      expect(scrollPosition).toHaveBeenCalledWith({ kind: 'user', fraction: 0.5 });
+      expect(scrollPosition).toHaveBeenCalledWith({
+        kind: 'user',
+        generation: 'generation-1',
+        fraction: 0.5,
+      });
     });
     expect(contentDidPaint).not.toHaveBeenCalled();
   });
@@ -169,6 +180,28 @@ describe('macOS 文档目录', () => {
       expect(contentDidPaint).toHaveBeenLastCalledWith({
         generation: 'generation-2',
         theme: 'dark',
+        hasContent: true,
+      });
+    });
+  });
+
+  it('首屏代码仍在等待高亮时不提前揭开纯文本预览', async () => {
+    const contentDidPaint = vi.fn();
+    globalThis.webkit = {
+      messageHandlers: {
+        contentDidPaint: { postMessage: contentDidPaint },
+      },
+    };
+
+    render(<MacOSDocumentView renderState={renderState('# First\n\n[deferred]')} />);
+    await new Promise((resolve) => globalThis.requestAnimationFrame(resolve));
+    expect(contentDidPaint).not.toHaveBeenCalled();
+
+    screen.getByTestId('deferred-code').dataset.renderState = 'highlighted';
+    await waitFor(() => {
+      expect(contentDidPaint).toHaveBeenCalledWith({
+        generation: 'generation-1',
+        theme: 'light',
         hasContent: true,
       });
     });

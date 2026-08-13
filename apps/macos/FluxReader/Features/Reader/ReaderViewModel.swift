@@ -81,12 +81,24 @@ final class ReaderViewModel: ObservableObject {
     var hasUnsavedChanges: Bool { draftContent != document.content }
   }
 
+  /// SwiftUI 必须把活动文稿、草稿和视图模式看成同一个状态快照。
+  ///
+  /// 这些字段若分别由多个 `@Published` 属性发布，切换标签时会短暂出现
+  /// “新文稿 + 旧草稿/旧模式”的组合，导致编辑器源码先出现、预览重复渲染。
+  private struct ActiveDocumentState {
+    var phase: Phase = .empty
+    var draftContent = ""
+    var splitPreviewContent = ""
+    var isEditing = false
+    var isSplitView = false
+  }
+
   private enum DraftRecoveryOperationKind: Equatable {
     case persist
     case clear
   }
 
-  @Published private(set) var phase: Phase = .empty
+  @Published private var activeDocumentState = ActiveDocumentState()
   @Published private(set) var workspaces: [WorkspaceSnapshot] = []
   @Published private(set) var recentDocuments: [RecentDocument] = []
   @Published private(set) var loadingWorkspaceURLs: Set<URL> = []
@@ -94,22 +106,43 @@ final class ReaderViewModel: ObservableObject {
   @Published private(set) var libraryMessage: String?
   @Published private(set) var searchResults: [WorkspaceSearchResult] = []
   @Published private(set) var isSearching = false
-  @Published var draftContent = "" {
-    didSet {
-      if draftContent != currentDocument?.content, saveStatusMessage != nil {
-        saveStatusMessage = nil
-      }
-      recomputeFindMatches()
-      scheduleDraftRecoveryPersistence()
-      captureCurrentTab()
-      scheduleDocumentSessionPersistence()
-      scheduleSplitPreviewUpdate()
+  @Published private(set) var loadingDocumentName: String?
+  private(set) var phase: Phase {
+    get { activeDocumentState.phase }
+    set {
+      var next = activeDocumentState
+      next.phase = newValue
+      activeDocumentState = next
     }
   }
-  @Published private(set) var splitPreviewContent = ""
-  @Published private(set) var isEditing = false
-  @Published private(set) var isSplitView = false {
-    didSet { flushSplitPreviewContent() }
+  var draftContent: String {
+    get { activeDocumentState.draftContent }
+    set { updateDraftContent(newValue) }
+  }
+  private(set) var splitPreviewContent: String {
+    get { activeDocumentState.splitPreviewContent }
+    set {
+      var next = activeDocumentState
+      next.splitPreviewContent = newValue
+      activeDocumentState = next
+    }
+  }
+  private(set) var isEditing: Bool {
+    get { activeDocumentState.isEditing }
+    set {
+      var next = activeDocumentState
+      next.isEditing = newValue
+      activeDocumentState = next
+    }
+  }
+  private(set) var isSplitView: Bool {
+    get { activeDocumentState.isSplitView }
+    set {
+      var next = activeDocumentState
+      next.isSplitView = newValue
+      if newValue { next.splitPreviewContent = next.draftContent }
+      activeDocumentState = next
+    }
   }
   @Published private(set) var documentTabs: [DocumentTab] = []
   @Published private(set) var activeTabID: URL?
@@ -217,7 +250,43 @@ final class ReaderViewModel: ObservableObject {
   }
 
   var previewDocument: MarkdownDocument? {
-    currentDocument?.withContent(isSplitView ? splitPreviewContent : draftContent)
+    currentDocument?.withContent(splitPreviewContent)
+  }
+
+  private func updateDraftContent(_ content: String) {
+    guard content != activeDocumentState.draftContent else { return }
+    var next = activeDocumentState
+    next.draftContent = content
+    // 纯编辑态的 Web 预览保持冻结；进入预览时再一次性刷新。
+    if !next.isEditing {
+      next.splitPreviewContent = content
+    }
+    activeDocumentState = next
+
+    if content != currentDocument?.content, saveStatusMessage != nil {
+      saveStatusMessage = nil
+    }
+    recomputeFindMatches()
+    scheduleDraftRecoveryPersistence()
+    captureCurrentTab()
+    scheduleDocumentSessionPersistence()
+    scheduleSplitPreviewUpdate()
+  }
+
+  private func applyActiveDocumentState(
+    phase: Phase,
+    draftContent: String,
+    isEditing: Bool,
+    isSplitView: Bool
+  ) {
+    activeDocumentState = ActiveDocumentState(
+      phase: phase,
+      draftContent: draftContent,
+      splitPreviewContent: draftContent,
+      isEditing: isEditing,
+      isSplitView: isSplitView
+    )
+    recomputeFindMatches()
   }
 
   var hasUnsavedChanges: Bool {
@@ -340,8 +409,14 @@ final class ReaderViewModel: ObservableObject {
   func setDocumentViewMode(_ mode: DocumentViewMode) {
     guard currentDocument != nil else { return }
     if mode != .preview, !canEdit { return }
-    isEditing = mode != .preview
-    isSplitView = mode == .split
+    var next = activeDocumentState
+    next.isEditing = mode != .preview
+    next.isSplitView = mode == .split
+    // 预览/分栏变为可见前一次性提交最新草稿。纯编辑态继续冻结 Web 内容。
+    if mode != .edit {
+      next.splitPreviewContent = next.draftContent
+    }
+    activeDocumentState = next
     captureCurrentTab()
     scheduleDocumentSessionPersistence()
   }
@@ -958,7 +1033,12 @@ final class ReaderViewModel: ObservableObject {
       preservesEditingState: preservesEditingState,
       retainedRecoveryVersionID: retainedRecoveryVersionID
     )
-    phase = .loading(url.lastPathComponent)
+    loadingDocumentName = url.lastPathComponent
+    // 已有文稿时继续保留当前编辑器与 WKWebView，只在其上显示加载状态。
+    // 读取成功后再原子切换文稿，避免每次打开文件都销毁并重建渲染器。
+    if currentDocument == nil {
+      phase = .loading(url.lastPathComponent)
+    }
 
     let resourceRootURL = preferredResourceRootURL ?? containingWorkspaceRoot(for: candidateURL)
     let editingState = preservesEditingState && isEditing && retainedRecoveryVersionID == nil
@@ -974,6 +1054,7 @@ final class ReaderViewModel: ObservableObject {
           self.documentLoadGeneration == loadGeneration
         else { return }
         self.activeDocumentLoad = nil
+        self.loadingDocumentName = nil
         applyLoadedDocument(
           document.withResourceRoot(resourceRootURL),
           access: candidateAccess,
@@ -987,6 +1068,7 @@ final class ReaderViewModel: ObservableObject {
           self?.documentLoadGeneration == loadGeneration
         else { return }
         self?.activeDocumentLoad = nil
+        self?.loadingDocumentName = nil
         if self?.pendingTabCloseID == (sessionRecord?.id ?? url.standardizedFileURL) {
           self?.pendingTabCloseID = nil
         }
@@ -1016,17 +1098,23 @@ final class ReaderViewModel: ObservableObject {
     recoveredDraftBaseline = nil
     currentRetainedRecoveryVersionID = retainedRecoveryVersionID
     currentDocumentAccess = access
-    phase = .loaded(document)
     let restoredDraft = sessionRecord?.draftContent
-    draftContent = restoredDraft ?? document.content
-    self.isEditing = (sessionRecord?.isEditing ?? isEditing) && retainedRecoveryVersionID == nil
-    self.isSplitView = (sessionRecord?.isSplitView ?? false) && retainedRecoveryVersionID == nil
+    let nextDraft = restoredDraft ?? document.content
+    let nextIsEditing = (sessionRecord?.isEditing ?? isEditing) && retainedRecoveryVersionID == nil
+    let nextIsSplitView =
+      (sessionRecord?.isSplitView ?? false) && retainedRecoveryVersionID == nil
+    applyActiveDocumentState(
+      phase: .loaded(document),
+      draftContent: nextDraft,
+      isEditing: nextIsEditing,
+      isSplitView: nextIsSplitView
+    )
     activeTabID = document.id
     let tab = OpenDocumentTab(
       document: document,
-      draftContent: draftContent,
-      isEditing: self.isEditing,
-      isSplitView: self.isSplitView,
+      draftContent: nextDraft,
+      isEditing: nextIsEditing,
+      isSplitView: nextIsSplitView,
       retainedRecoveryVersionID: retainedRecoveryVersionID,
       access: access,
       recoveredDraftBaseline: nil
@@ -1102,6 +1190,8 @@ final class ReaderViewModel: ObservableObject {
   private func applyOpenDocumentTab(_ tab: OpenDocumentTab) {
     documentLoadGeneration &+= 1
     loadTask?.cancel()
+    activeDocumentLoad = nil
+    loadingDocumentName = nil
     isApplyingDocumentState = true
     defer { isApplyingDocumentState = false }
     documentSessionID = UUID()
@@ -1109,10 +1199,12 @@ final class ReaderViewModel: ObservableObject {
     currentDocumentAccess = tab.access
     currentRetainedRecoveryVersionID = tab.retainedRecoveryVersionID
     recoveredDraftBaseline = tab.recoveredDraftBaseline
-    phase = .loaded(tab.document)
-    draftContent = tab.draftContent
-    isEditing = tab.isEditing
-    isSplitView = tab.isSplitView
+    applyActiveDocumentState(
+      phase: .loaded(tab.document),
+      draftContent: tab.draftContent,
+      isEditing: tab.isEditing,
+      isSplitView: tab.isSplitView
+    )
     saveStatusMessage = nil
     saveErrorMessage = nil
     activeFindMatchIndex = 0
@@ -1172,10 +1264,12 @@ final class ReaderViewModel: ObservableObject {
     clearDraftRecoveryNow()
     guard !documentTabs.isEmpty else {
       isApplyingDocumentState = true
-      phase = .empty
-      draftContent = ""
-      isEditing = false
-      isSplitView = false
+      applyActiveDocumentState(
+        phase: .empty,
+        draftContent: "",
+        isEditing: false,
+        isSplitView: false
+      )
       activeTabID = nil
       currentDocumentAccess = nil
       currentRetainedRecoveryVersionID = nil
@@ -1375,10 +1469,7 @@ final class ReaderViewModel: ObservableObject {
 
   private func scheduleSplitPreviewUpdate() {
     splitPreviewTask?.cancel()
-    guard isSplitView else {
-      splitPreviewContent = draftContent
-      return
-    }
+    guard isSplitView else { return }
 
     let latestContent = draftContent
     splitPreviewTask = Task { [weak self] in
@@ -1612,10 +1703,12 @@ final class ReaderViewModel: ObservableObject {
     recoveredDraftBaseline = record
     currentRetainedRecoveryVersionID = nil
     currentDocumentAccess = access
-    phase = .loaded(document)
-    draftContent = record.draftContent
-    isEditing = true
-    isSplitView = false
+    applyActiveDocumentState(
+      phase: .loaded(document),
+      draftContent: record.draftContent,
+      isEditing: true,
+      isSplitView: false
+    )
     activeTabID = document.id
     openDocumentTabs[document.id] = OpenDocumentTab(
       document: document,
@@ -1712,7 +1805,16 @@ final class ReaderViewModel: ObservableObject {
         self.recoveredDraftBaseline = nil
         self.currentRetainedRecoveryVersionID = nil
         self.currentDocumentAccess = savedAccess
-        self.phase = .loaded(savedWithResourceRoot)
+        let nextDraft =
+          draftAfterSave == contentToSave
+          ? savedDocument.content
+          : draftAfterSave
+        self.applyActiveDocumentState(
+          phase: .loaded(savedWithResourceRoot),
+          draftContent: nextDraft,
+          isEditing: self.isEditing,
+          isSplitView: self.isSplitView
+        )
         self.lastSaveOutcome = SafeSaveContract.committed(
           document: savedWithResourceRoot,
           locator: savedURL.absoluteString
@@ -1723,10 +1825,8 @@ final class ReaderViewModel: ObservableObject {
         }
         self.activeTabID = savedURL
         if draftAfterSave == contentToSave {
-          self.draftContent = savedDocument.content
           self.saveStatusMessage = "已保存"
         } else {
-          self.draftContent = draftAfterSave
           self.saveStatusMessage = "已保存上一版本，当前仍有未保存的更改"
         }
 
@@ -2091,10 +2191,13 @@ final class ReaderViewModel: ObservableObject {
         documentSessionID = UUID()
         currentDocumentAccess = nil
         isApplyingDocumentState = true
-        phase = .empty
-        draftContent = ""
+        applyActiveDocumentState(
+          phase: .empty,
+          draftContent: "",
+          isEditing: false,
+          isSplitView: false
+        )
         isApplyingDocumentState = false
-        isEditing = false
         saveStatusMessage = nil
       }
     }

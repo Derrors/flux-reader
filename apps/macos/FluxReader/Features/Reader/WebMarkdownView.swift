@@ -71,6 +71,7 @@ struct WebMarkdownView: NSViewRepresentable {
   let findCaseSensitive: Bool
   let activeFindMatch: Int
   let scrollSynchronizer: SplitScrollSynchronizer?
+  let isActive: Bool
   let onRenderPending: @MainActor () -> Void
   let onContentDidPaint: @MainActor () -> Void
   let onFailure: @MainActor () -> Void
@@ -83,6 +84,7 @@ struct WebMarkdownView: NSViewRepresentable {
     findCaseSensitive: Bool = false,
     activeFindMatch: Int = 0,
     scrollSynchronizer: SplitScrollSynchronizer? = nil,
+    isActive: Bool = true,
     onRenderPending: @escaping @MainActor () -> Void = {},
     onContentDidPaint: @escaping @MainActor () -> Void = {},
     onFailure: @escaping @MainActor () -> Void
@@ -92,6 +94,7 @@ struct WebMarkdownView: NSViewRepresentable {
     self.findCaseSensitive = findCaseSensitive
     self.activeFindMatch = activeFindMatch
     self.scrollSynchronizer = scrollSynchronizer
+    self.isActive = isActive
     self.onRenderPending = onRenderPending
     self.onContentDidPaint = onContentDidPaint
     self.onFailure = onFailure
@@ -119,7 +122,7 @@ struct WebMarkdownView: NSViewRepresentable {
         documentResourceHandler: context.coordinator.documentResourceHandler
       )
     else {
-      onFailure()
+      Task { @MainActor in onFailure() }
       return WKWebView(frame: .zero)
     }
 
@@ -130,13 +133,15 @@ struct WebMarkdownView: NSViewRepresentable {
     webView.uiDelegate = context.coordinator
 
     context.coordinator.attach(to: webView)
-    context.coordinator.update(
-      document: document,
-      theme: rendererTheme,
-      findQuery: findQuery,
-      findCaseSensitive: findCaseSensitive,
-      activeFindMatch: activeFindMatch
-    )
+    if isActive {
+      context.coordinator.update(
+        document: document,
+        theme: rendererTheme,
+        findQuery: findQuery,
+        findCaseSensitive: findCaseSensitive,
+        activeFindMatch: activeFindMatch
+      )
+    }
     context.coordinator.loadRenderer()
     return webView
   }
@@ -146,6 +151,7 @@ struct WebMarkdownView: NSViewRepresentable {
     context.coordinator.onRenderPending = onRenderPending
     context.coordinator.onContentDidPaint = onContentDidPaint
     context.coordinator.updateScrollSynchronizer(scrollSynchronizer)
+    guard isActive else { return }
     context.coordinator.update(
       document: document,
       theme: rendererTheme,
@@ -202,15 +208,16 @@ struct WebMarkdownView: NSViewRepresentable {
     private weak var scrollSynchronizer: SplitScrollSynchronizer?
     private var pendingPayload: RenderPayload?
     private var lastRenderedPayload: RenderPayload?
+    private var presentedPayload: RenderPayload?
     private var rendererReady = false
     private var didReportFailure = false
     private var webContentRetryBudget = WebContentRetryBudget()
     private var handoffTracker = RenderHandoffTracker()
     private var paintTimeoutTask: Task<Void, Never>?
-    private var lastResourceDocument: MarkdownDocument?
     private var resourceToken = UUID().uuidString
     private var pendingScrollFraction: Double?
     private var isScrollUpdateInFlight = false
+    private var documentScrollFractions: [String: Double] = [:]
 
     init(
       scrollSynchronizer: SplitScrollSynchronizer?,
@@ -271,16 +278,14 @@ struct WebMarkdownView: NSViewRepresentable {
       findCaseSensitive: Bool,
       activeFindMatch: Int
     ) {
-      if document != lastResourceDocument {
-        resourceToken = UUID().uuidString
-        lastResourceDocument = document
-      }
+      resourceToken = Self.resourceToken(for: document)
       documentResourceHandler.update(
         document: document,
         resourceToken: resourceToken
       )
       let candidate = RenderPayload(
         generation: "",
+        documentKey: document.id.absoluteString,
         content: document.content,
         title: document.displayName,
         theme: theme,
@@ -297,6 +302,7 @@ struct WebMarkdownView: NSViewRepresentable {
       let hidesVisibleContent = pendingPayload?.hasSameVisibleContent(as: candidate) != true
       pendingPayload = RenderPayload(
         generation: UUID().uuidString,
+        documentKey: candidate.documentKey,
         content: candidate.content,
         title: candidate.title,
         theme: candidate.theme,
@@ -334,11 +340,13 @@ struct WebMarkdownView: NSViewRepresentable {
       case Self.copyTextHandlerName:
         copyText(message.body)
       case Self.scrollHandlerName:
-        if let payload = message.body as? [String: Any],
-          payload["kind"] as? String == "user",
-          let value = payload["fraction"] as? NSNumber
-        {
-          let fraction = min(1, max(0, value.doubleValue))
+        if let fraction = Self.userScrollFraction(
+          from: message.body,
+          presentedGeneration: presentedPayload?.generation
+        ) {
+          if let documentKey = presentedPayload?.documentKey {
+            documentScrollFractions[documentKey] = fraction
+          }
           scrollSynchronizer?.userDidScroll(.preview, fraction: fraction)
         } else if let value = message.body as? NSNumber {
           // Accept the legacy payload while an already-loaded renderer is
@@ -406,6 +414,7 @@ struct WebMarkdownView: NSViewRepresentable {
 
       rendererReady = false
       lastRenderedPayload = nil
+      presentedPayload = nil
       if let pendingPayload {
         beginHandoff(for: pendingPayload, hidesVisibleContent: true)
       }
@@ -507,6 +516,7 @@ struct WebMarkdownView: NSViewRepresentable {
       didReportFailure = true
       paintTimeoutTask?.cancel()
       paintTimeoutTask = nil
+      presentedPayload = pendingPayload
       handoffTracker.invalidate()
       onFailure()
     }
@@ -517,9 +527,10 @@ struct WebMarkdownView: NSViewRepresentable {
     ) {
       handoffTracker.begin(generation: payload.generation)
       paintTimeoutTask?.cancel()
-      if WebMarkdownView.isHandoffEnabled && hidesVisibleContent {
-        webView?.alphaValue = 0
-
+      if hidesVisibleContent {
+        if WebMarkdownView.isHandoffEnabled && lastRenderedPayload == nil {
+          webView?.alphaValue = 0
+        }
         let generation = payload.generation
         Task { @MainActor [weak self] in
           guard self?.handoffTracker.pendingGeneration == generation else { return }
@@ -554,19 +565,36 @@ struct WebMarkdownView: NSViewRepresentable {
 
       paintTimeoutTask?.cancel()
       paintTimeoutTask = nil
-      if let webView {
-        NSAnimationContext.runAnimationGroup { context in
-          context.duration = 0.12
-          webView.animator().alphaValue = 1
-        }
-      }
+      presentedPayload = pendingPayload
+      pendingScrollFraction = documentScrollFractions[pendingPayload.documentKey] ?? 0
+      flushPendingScrollFraction()
+      webView?.alphaValue = 1
       onContentDidPaint()
+    }
+
+    static func resourceToken(for document: MarkdownDocument) -> String {
+      document.resourceRevision.uuidString.lowercased()
+    }
+
+    static func userScrollFraction(
+      from body: Any,
+      presentedGeneration: String?
+    ) -> Double? {
+      guard
+        let payload = body as? [String: Any],
+        payload["kind"] as? String == "user",
+        let generation = payload["generation"] as? String,
+        generation == presentedGeneration,
+        let value = payload["fraction"] as? NSNumber
+      else { return nil }
+      return min(1, max(0, value.doubleValue))
     }
   }
 }
 
 private struct RenderPayload: Equatable {
   let generation: String
+  let documentKey: String
   let content: String
   let title: String
   let theme: String
@@ -576,7 +604,8 @@ private struct RenderPayload: Equatable {
   let activeFindMatch: Int
 
   func isEquivalent(to other: RenderPayload) -> Bool {
-    content == other.content
+    documentKey == other.documentKey
+      && content == other.content
       && title == other.title
       && theme == other.theme
       && resourceToken == other.resourceToken
@@ -586,7 +615,8 @@ private struct RenderPayload: Equatable {
   }
 
   func hasSameVisibleContent(as other: RenderPayload) -> Bool {
-    content == other.content
+    documentKey == other.documentKey
+      && content == other.content
       && theme == other.theme
       && resourceToken == other.resourceToken
   }

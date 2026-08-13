@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Toc from './components/Toc';
 import MarkdownView from './markdown/MarkdownView';
-import { createMarkdownSnapshot } from './markdown/pipeline';
+import { getCachedMarkdownSnapshot } from './markdown/pipeline';
 import {
   DEFAULT_RENDER_PAYLOAD,
   normalizeRenderPayload,
@@ -64,6 +64,51 @@ function notifyNativeContentDidPaint(renderState) {
   });
 }
 
+const VISUAL_STABILITY_TIMEOUT_MS = 1_200;
+const VISUAL_STABILITY_MARGIN_PX = 800;
+
+function isNearViewport(element) {
+  const rect = element.getBoundingClientRect?.();
+  if (!rect) return true;
+  const viewportHeight = globalThis.innerHeight || globalThis.document?.documentElement?.clientHeight || 0;
+  return rect.bottom >= -VISUAL_STABILITY_MARGIN_PX
+    && rect.top <= viewportHeight + VISUAL_STABILITY_MARGIN_PX;
+}
+
+function hasPendingInitialVisualWork() {
+  const root = globalThis.document?.querySelector('.macos-renderer');
+  if (!root) return false;
+  // `deferred` 是代码块等待 IntersectionObserver 启动高亮的初始状态。
+  // 若只等待 loading，会在首帧先露出纯文本，下一帧才闪成高亮结果。
+  const pendingRender = [
+    ...root.querySelectorAll('[data-render-state="loading"], [data-render-state="deferred"]'),
+  ]
+    .some(isNearViewport);
+  if (pendingRender) return true;
+  return [...root.querySelectorAll('img')]
+    .some((image) => isNearViewport(image) && !image.complete);
+}
+
+function notifyWhenInitialVisualsSettle(renderState) {
+  const startedAt = globalThis.performance?.now?.() ?? Date.now();
+  let frame = 0;
+  let cancelled = false;
+  const check = () => {
+    if (cancelled) return;
+    const now = globalThis.performance?.now?.() ?? Date.now();
+    if (!hasPendingInitialVisualWork() || now - startedAt >= VISUAL_STABILITY_TIMEOUT_MS) {
+      notifyNativeContentDidPaint(renderState);
+      return;
+    }
+    frame = globalThis.requestAnimationFrame(check);
+  };
+  frame = globalThis.requestAnimationFrame(check);
+  return () => {
+    cancelled = true;
+    if (frame) globalThis.cancelAnimationFrame(frame);
+  };
+}
+
 export function MacOSRenderer() {
   const [renderState, setRenderState] = useState(pendingPayload);
 
@@ -104,6 +149,7 @@ export function MacOSRenderer() {
         pendingScrollFraction = fraction;
         globalThis.webkit?.messageHandlers?.scrollPosition?.postMessage({
           kind: 'user',
+          generation: renderState.generation,
           fraction,
         });
       });
@@ -113,7 +159,7 @@ export function MacOSRenderer() {
       element.removeEventListener('scroll', onScroll);
       if (frame) globalThis.cancelAnimationFrame(frame);
     };
-  }, [renderState.content]);
+  }, [renderState.content, renderState.generation]);
 
   return <MacOSDocumentView renderState={renderState} />;
 }
@@ -126,18 +172,14 @@ export function MacOSDocumentView({ renderState }) {
     [renderState.resourceToken],
   );
   const markdownSnapshot = useMemo(
-    () => createMarkdownSnapshot(renderState.content),
+    () => getCachedMarkdownSnapshot(renderState.content),
     [renderState.content],
   );
   const toc = markdownSnapshot.toc;
 
   useEffect(() => {
     if (!renderState.generation) return undefined;
-
-    const frame = globalThis.requestAnimationFrame(() => {
-      notifyNativeContentDidPaint(renderState);
-    });
-    return () => globalThis.cancelAnimationFrame(frame);
+    return notifyWhenInitialVisualsSettle(renderState);
   }, [renderState.content, renderState.generation, renderState.theme]);
 
   return (

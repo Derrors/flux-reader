@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   createMarkdownSnapshot,
   extractToc,
+  getCachedMarkdownSnapshot,
   getMarkdownPipelineDiagnostics,
+  getMarkdownSnapshotCacheDiagnostics,
   resetMarkdownPipelineDiagnostics,
+  resetMarkdownSnapshotCache,
 } from './pipeline';
 
 describe('Markdown token snapshot', () => {
@@ -39,5 +42,27 @@ Paragraph
       { level: 1, text: 'One', id: 'one' },
       { level: 2, text: 'Two', id: 'two' },
     ]);
+  });
+
+  it('跨标签返回时复用同一份 Markdown 快照', () => {
+    resetMarkdownPipelineDiagnostics();
+    resetMarkdownSnapshotCache();
+
+    const first = getCachedMarkdownSnapshot('# First');
+    getCachedMarkdownSnapshot('# Second');
+    const returned = getCachedMarkdownSnapshot('# First');
+
+    expect(returned).toBe(first);
+    expect(getMarkdownPipelineDiagnostics()).toEqual({
+      preprocessCount: 2,
+      lexCount: 2,
+      renderCount: 2,
+      sanitizeCount: 2,
+    });
+    expect(getMarkdownSnapshotCacheDiagnostics()).toMatchObject({
+      entries: 2,
+      hits: 1,
+      misses: 2,
+    });
   });
 });

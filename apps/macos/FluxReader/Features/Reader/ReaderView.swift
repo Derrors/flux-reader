@@ -6,6 +6,8 @@ struct ReaderView: View {
   @ObservedObject var viewModel: ReaderViewModel
   @Binding var appearance: AppAppearance
   @StateObject private var splitScrollSynchronizer = SplitScrollSynchronizer()
+  @State private var splitFraction = 0.5
+  @State private var splitDragStartFraction: CGFloat?
 
   var body: some View {
     NavigationSplitView {
@@ -523,6 +525,7 @@ struct ReaderView: View {
           .frame(maxWidth: .infinity, alignment: .leading)
       }
       .buttonStyle(.plain)
+      .accessibilityIdentifier("flux.workspace-document.\(node.name)")
       .foregroundStyle(
         viewModel.currentDocument?.id == node.id ? Color.accentColor : Color.primary
       )
@@ -582,44 +585,50 @@ struct ReaderView: View {
           Divider()
         }
 
-        if viewModel.isSplitView, let previewDocument = viewModel.previewDocument {
-          HSplitView {
-            MarkdownEditorView(
-              content: $viewModel.draftContent,
-              document: document,
-              hasUnsavedChanges: viewModel.hasUnsavedChanges,
-              isSaving: viewModel.isSaving,
-              statusMessage: viewModel.saveStatusMessage,
-              selectedRange: viewModel.activeFindRange,
-              scrollSynchronizer: splitScrollSynchronizer
-            )
-            .frame(minWidth: 280)
+        if let previewDocument = viewModel.previewDocument {
+          GeometryReader { geometry in
+            StableDocumentModeLayout(
+              mode: viewModel.documentViewMode,
+              splitFraction: splitFraction
+            ) {
+              MarkdownEditorView(
+                content: draftContentBinding,
+                document: document,
+                hasUnsavedChanges: viewModel.hasUnsavedChanges,
+                isSaving: viewModel.isSaving,
+                statusMessage: viewModel.saveStatusMessage,
+                selectedRange: viewModel.activeFindRange,
+                scrollSynchronizer: viewModel.isSplitView ? splitScrollSynchronizer : nil,
+                isActive: viewModel.isEditing
+              )
+              .opacity(viewModel.documentViewMode == .preview ? 0 : 1)
+              .allowsHitTesting(viewModel.documentViewMode != .preview)
+              .accessibilityHidden(viewModel.documentViewMode == .preview)
 
-            MarkdownRendererView(
-              document: previewDocument,
-              findQuery: viewModel.isFindPresented ? viewModel.findQuery : "",
-              findCaseSensitive: viewModel.findCaseSensitive,
-              activeFindMatch: viewModel.activeFindMatchIndex,
-              scrollSynchronizer: splitScrollSynchronizer
-            )
-            .frame(minWidth: 280)
+              Divider()
+                .opacity(viewModel.isSplitView ? 1 : 0)
+                .contentShape(Rectangle().inset(by: -4))
+                .gesture(splitDividerGesture(containerWidth: geometry.size.width))
+
+              MarkdownRendererView(
+                document: previewDocument,
+                findQuery: viewModel.isFindPresented ? viewModel.findQuery : "",
+                findCaseSensitive: viewModel.findCaseSensitive,
+                activeFindMatch: viewModel.activeFindMatchIndex,
+                scrollSynchronizer: viewModel.isSplitView ? splitScrollSynchronizer : nil,
+                isActive: viewModel.documentViewMode != .edit
+              )
+              .opacity(viewModel.documentViewMode == .edit ? 0 : 1)
+              .allowsHitTesting(viewModel.documentViewMode != .edit)
+              .accessibilityHidden(viewModel.documentViewMode == .edit)
+            }
+            .clipped()
           }
-        } else if viewModel.isEditing {
-          MarkdownEditorView(
-            content: $viewModel.draftContent,
-            document: document,
-            hasUnsavedChanges: viewModel.hasUnsavedChanges,
-            isSaving: viewModel.isSaving,
-            statusMessage: viewModel.saveStatusMessage,
-            selectedRange: viewModel.activeFindRange
-          )
-        } else if let previewDocument = viewModel.previewDocument {
-          MarkdownRendererView(
-            document: previewDocument,
-            findQuery: viewModel.isFindPresented ? viewModel.findQuery : "",
-            findCaseSensitive: viewModel.findCaseSensitive,
-            activeFindMatch: viewModel.activeFindMatchIndex
-          )
+        }
+      }
+      .overlay {
+        if let loadingDocumentName = viewModel.loadingDocumentName {
+          DocumentLoadingOverlay(fileName: loadingDocumentName)
         }
       }
     case .failure(let message):
@@ -672,6 +681,30 @@ struct ReaderView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
+  private var draftContentBinding: Binding<String> {
+    Binding(
+      get: { viewModel.draftContent },
+      set: { viewModel.draftContent = $0 }
+    )
+  }
+
+  private func splitDividerGesture(containerWidth: CGFloat) -> some Gesture {
+    DragGesture(minimumDistance: 1)
+      .onChanged { value in
+        guard containerWidth > 0 else { return }
+        let start = splitDragStartFraction ?? splitFraction
+        if splitDragStartFraction == nil { splitDragStartFraction = start }
+        let minimum = min(0.45, max(0.2, 280 / containerWidth))
+        splitFraction = min(
+          1 - minimum,
+          max(minimum, start + value.translation.width / containerWidth)
+        )
+      }
+      .onEnded { _ in
+        splitDragStartFraction = nil
+      }
+  }
+
   private func presentSavePanel() {
     guard let presentation = viewModel.saveAsPresentation else { return }
 
@@ -687,6 +720,95 @@ struct ReaderView: View {
     panel.begin { response in
       guard response == .OK, let url = panel.url else { return }
       viewModel.saveAs(to: url, for: presentation.sourceDocumentURL)
+    }
+  }
+}
+
+private struct DocumentLoadingOverlay: View {
+  let fileName: String
+
+  var body: some View {
+    ZStack {
+      Color(nsColor: .windowBackgroundColor)
+        .opacity(0.82)
+      VStack(spacing: 12) {
+        ProgressView()
+          .controlSize(.regular)
+        Text("正在打开 \(fileName)…")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      .padding(.horizontal, 22)
+      .padding(.vertical, 16)
+      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("正在打开 \(fileName)")
+  }
+}
+
+/// 始终保留编辑器和 Web 预览实例，只改变布局位置。
+/// 这避免在预览/编辑/分栏或标签模式不同时销毁、重建 WKWebView。
+private struct StableDocumentModeLayout: Layout {
+  let mode: ReaderViewModel.DocumentViewMode
+  let splitFraction: CGFloat
+
+  func sizeThatFits(
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout Void
+  ) -> CGSize {
+    proposal.replacingUnspecifiedDimensions(by: CGSize(width: 860, height: 580))
+  }
+
+  func placeSubviews(
+    in bounds: CGRect,
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout Void
+  ) {
+    guard subviews.count == 3 else { return }
+    let fullProposal = ProposedViewSize(width: bounds.width, height: bounds.height)
+    let hiddenOrigin = CGPoint(x: bounds.minX - bounds.width - 2, y: bounds.minY)
+
+    switch mode {
+    case .preview:
+      subviews[0].place(at: hiddenOrigin, anchor: .topLeading, proposal: fullProposal)
+      subviews[1].place(
+        at: hiddenOrigin,
+        anchor: .topLeading,
+        proposal: ProposedViewSize(width: 0, height: 0)
+      )
+      subviews[2].place(at: bounds.origin, anchor: .topLeading, proposal: fullProposal)
+    case .edit:
+      subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: fullProposal)
+      subviews[1].place(
+        at: hiddenOrigin,
+        anchor: .topLeading,
+        proposal: ProposedViewSize(width: 0, height: 0)
+      )
+      subviews[2].place(at: hiddenOrigin, anchor: .topLeading, proposal: fullProposal)
+    case .split:
+      let dividerWidth: CGFloat = 1
+      let availableWidth = max(0, bounds.width - dividerWidth)
+      let leftWidth = availableWidth * min(0.8, max(0.2, splitFraction))
+      let rightWidth = max(0, availableWidth - leftWidth)
+      subviews[0].place(
+        at: bounds.origin,
+        anchor: .topLeading,
+        proposal: ProposedViewSize(width: leftWidth, height: bounds.height)
+      )
+      subviews[1].place(
+        at: CGPoint(x: bounds.minX + leftWidth, y: bounds.minY),
+        anchor: .topLeading,
+        proposal: ProposedViewSize(width: dividerWidth, height: bounds.height)
+      )
+      subviews[2].place(
+        at: CGPoint(x: bounds.minX + leftWidth + dividerWidth, y: bounds.minY),
+        anchor: .topLeading,
+        proposal: ProposedViewSize(width: rightWidth, height: bounds.height)
+      )
     }
   }
 }
@@ -862,13 +984,15 @@ private struct MarkdownEditorView: View {
   let statusMessage: String?
   var selectedRange: NSRange? = nil
   var scrollSynchronizer: SplitScrollSynchronizer? = nil
+  var isActive = true
 
   var body: some View {
     VStack(spacing: 0) {
       MarkdownTextView(
         text: $content,
         selectedRange: selectedRange,
-        scrollSynchronizer: scrollSynchronizer
+        scrollSynchronizer: scrollSynchronizer,
+        isActive: isActive
       )
       .accessibilityLabel("Markdown 编辑器")
       .accessibilityIdentifier("flux.editor")
@@ -912,6 +1036,7 @@ private struct MarkdownTextView: NSViewRepresentable {
   @Binding var text: String
   let selectedRange: NSRange?
   let scrollSynchronizer: SplitScrollSynchronizer?
+  let isActive: Bool
 
   func makeCoordinator() -> Coordinator {
     Coordinator(parent: self)
@@ -946,7 +1071,7 @@ private struct MarkdownTextView: NSViewRepresentable {
     textView.textContainerInset = NSSize(width: 12, height: 12)
     textView.textContainer?.lineFragmentPadding = 0
     textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-    textView.string = text
+    textView.string = isActive ? text : ""
     textView.delegate = context.coordinator
     textView.isAutomaticQuoteSubstitutionEnabled = false
     textView.isAutomaticDashSubstitutionEnabled = false
@@ -958,18 +1083,22 @@ private struct MarkdownTextView: NSViewRepresentable {
       textView: textView,
       scrollSynchronizer: scrollSynchronizer
     )
+    context.coordinator.wasActive = isActive
 
     DispatchQueue.main.async {
+      guard context.coordinator.parent.isActive else { return }
       textView.window?.makeFirstResponder(textView)
     }
     return scrollView
   }
 
   func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    let becameActive = isActive && !context.coordinator.wasActive
+    context.coordinator.wasActive = isActive
     context.coordinator.parent = self
     context.coordinator.updateScrollSynchronizer(scrollSynchronizer)
     guard let textView = scrollView.documentView as? NSTextView else { return }
-    if textView.string != text {
+    if isActive, textView.string != text {
       context.coordinator.isApplyingText = true
       let selection = textView.selectedRange()
       textView.string = text
@@ -980,12 +1109,18 @@ private struct MarkdownTextView: NSViewRepresentable {
         ))
       context.coordinator.isApplyingText = false
     }
-    if let selectedRange,
+    if isActive,
+      let selectedRange,
       NSMaxRange(selectedRange) <= (textView.string as NSString).length,
       textView.selectedRange() != selectedRange
     {
       textView.setSelectedRange(selectedRange)
       textView.scrollRangeToVisible(selectedRange)
+    }
+    if becameActive {
+      DispatchQueue.main.async {
+        textView.window?.makeFirstResponder(textView)
+      }
     }
   }
 
@@ -998,6 +1133,7 @@ private struct MarkdownTextView: NSViewRepresentable {
   final class Coordinator: NSObject, NSTextViewDelegate, SplitScrollEndpoint {
     var parent: MarkdownTextView
     var isApplyingText = false
+    var wasActive = false
     private weak var scrollView: NSScrollView?
     private weak var textView: NSTextView?
     private weak var scrollSynchronizer: SplitScrollSynchronizer?

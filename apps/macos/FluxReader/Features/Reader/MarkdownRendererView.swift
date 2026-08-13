@@ -7,22 +7,19 @@ struct MarkdownRendererView: View {
   var findCaseSensitive = false
   var activeFindMatch = 0
   var scrollSynchronizer: SplitScrollSynchronizer? = nil
+  var isActive = true
 
   @State private var usesNativeFallback = false
-  @State private var isWebContentVisible = !WebMarkdownView.isHandoffEnabled
+  @State private var hasPresentedWebContent = !WebMarkdownView.isHandoffEnabled
+  @State private var isRenderPending = WebMarkdownView.isHandoffEnabled
+  @State private var presentedDocumentID: URL?
 
   var body: some View {
     VStack(spacing: 0) {
       ZStack {
-        if !isWebContentVisible || usesNativeFallback || WebMarkdownView.rendererURL == nil {
-          Group {
-            if usesNativeFallback || WebMarkdownView.rendererURL == nil {
-              NativeMarkdownView(document: document)
-            } else {
-              NativeMarkdownPlaceholderView(document: document)
-            }
-          }
-          .accessibilityIdentifier("flux-reader-native-placeholder")
+        if usesNativeFallback || WebMarkdownView.rendererURL == nil {
+          NativeMarkdownView(document: document)
+            .accessibilityIdentifier("flux-reader-native-placeholder")
         }
 
         if WebMarkdownView.rendererURL != nil && !usesNativeFallback {
@@ -32,25 +29,29 @@ struct MarkdownRendererView: View {
             findCaseSensitive: findCaseSensitive,
             activeFindMatch: activeFindMatch,
             scrollSynchronizer: scrollSynchronizer,
+            isActive: isActive,
             onRenderPending: {
-              if WebMarkdownView.isHandoffEnabled {
-                isWebContentVisible = false
-              }
+              isRenderPending = true
             },
             onContentDidPaint: {
-              withAnimation(.easeOut(duration: 0.12)) {
-                isWebContentVisible = true
-              }
+              hasPresentedWebContent = true
+              presentedDocumentID = document.id
+              isRenderPending = false
             },
             onFailure: {
-              isWebContentVisible = false
+              isRenderPending = false
               usesNativeFallback = true
             }
           )
-          .opacity(isWebContentVisible ? 1 : 0)
-          .allowsHitTesting(isWebContentVisible)
-          .accessibilityHidden(!isWebContentVisible)
           .accessibilityIdentifier("flux-reader-web-preview")
+        }
+
+        if !usesNativeFallback
+          && WebMarkdownView.isHandoffEnabled
+          && (isRenderPending || presentedDocumentID != document.id)
+          && isActive
+        {
+          RenderLoadingOverlay(hasPreviousContent: hasPresentedWebContent)
         }
       }
 
@@ -59,9 +60,33 @@ struct MarkdownRendererView: View {
       DocumentStatusBar(document: document)
     }
     .onChange(of: document.id) { _, _ in
+      let wasUsingNativeFallback = usesNativeFallback
       usesNativeFallback = false
-      isWebContentVisible = !WebMarkdownView.isHandoffEnabled
+      // 正常 Web 标签切换由 Coordinator 的 generation 回调驱动。
+      // 这里只处理从上一个文稿的 native fallback 重新挂载 WebView 的瞬间。
+      if wasUsingNativeFallback && isActive { isRenderPending = true }
     }
+  }
+}
+
+private struct RenderLoadingOverlay: View {
+  let hasPreviousContent: Bool
+
+  var body: some View {
+    ZStack {
+      Color(nsColor: .textBackgroundColor)
+        .opacity(hasPreviousContent ? 0.72 : 1)
+      VStack(spacing: 10) {
+        ProgressView()
+          .controlSize(.small)
+        Text("正在渲染预览…")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .allowsHitTesting(false)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("正在渲染预览")
   }
 }
 
