@@ -1,6 +1,6 @@
 [package]
 name = "flux-reader-windows"
-version = "0.1.27"
+version = "0.1.28"
 description = "Flux Reader Windows desktop shell"
 authors = ["Flux Reader contributors"]
 edition = "2021"

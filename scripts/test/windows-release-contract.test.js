@@ -42,3 +42,22 @@ test('keeps the Windows production bootstrap compatible with renderer dependenci
   // replaces the root contents, instead of presenting an unexplained white page.
   assert.match(windowsHtml, /<div id="root">\s*<p role="status">[^<]+<\/p>\s*<\/div>/);
 });
+
+test('keeps the native Windows title bar reachable and fully controllable', () => {
+  const tauriConfig = JSON.parse(
+    fs.readFileSync(path.join(root, 'apps/windows/src-tauri/tauri.conf.json'), 'utf8'),
+  );
+  const [mainWindow] = tauriConfig.app.windows;
+
+  // A centered 1280x820 logical window can exceed the usable work area on
+  // smaller or DPI-scaled displays. Constraining it keeps the native caption
+  // inside the monitor instead of centering the drag region above the screen.
+  assert.equal(mainWindow.center, true);
+  assert.equal(mainWindow.preventOverflow, true);
+  assert.equal(mainWindow.decorations, true);
+  assert.equal(mainWindow.resizable, true);
+  assert.equal(mainWindow.maximizable, true);
+  assert.equal(mainWindow.minimizable, true);
+  assert.equal(mainWindow.closable, true);
+  assert.equal(mainWindow.fullscreen, false);
+});
