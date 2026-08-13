@@ -7,6 +7,7 @@
  *  - 渲染出的 SVG 支持下载
  */
 import { useEffect, useId, useRef, useState } from 'react';
+import MediaFrame from './MediaFrame';
 
 /* zinc 色板，与应用整体配色保持一致 */
 const DARK_VARS = {
@@ -154,15 +155,15 @@ export default function Mermaid({ code, theme }) {
   }
 
   return (
-    <div className="mermaid-block" data-render-state="rendered">
+    <MediaFrame
+      className="mermaid-block"
+      data-render-state="rendered"
+      label="Mermaid 图表"
+      onDownload={download}
+    >
       {stage}
-      <div className="mermaid-toolbar">
-        <button type="button" onClick={download} title="下载 SVG">
-          下载 SVG
-        </button>
-      </div>
       {/* mermaid 以 securityLevel:strict 生成，且内容源自本地文件 */}
       <div className="mermaid-canvas" dangerouslySetInnerHTML={{ __html: svg }} />
-    </div>
+    </MediaFrame>
   );
 }

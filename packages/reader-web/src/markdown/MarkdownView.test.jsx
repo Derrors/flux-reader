@@ -27,6 +27,10 @@ describe('MarkdownView 图片资源', () => {
       'flux-reader-resource://image/doc?path=images%2Fcover.png',
     );
     expect(resolveImageSource).toHaveBeenCalledWith('images/cover.png');
+    expect(screen.getByRole('button', { name: '放大查看图片“封面”' }))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '调整图片“封面”大小' }))
+      .toBeInTheDocument();
 
     rerender(<MarkdownView content="![封面](images/cover.png)" />);
     expect(screen.queryByRole('img', { name: '封面' })).not.toBeInTheDocument();
@@ -44,6 +48,20 @@ describe('MarkdownView 图片资源', () => {
       'https://example.com/a.png',
     );
     expect(container.querySelector('img[alt="恶意"]')).toBeNull();
+  });
+
+  it('把链接图片的交互控件放在链接外，避免嵌套按钮', () => {
+    const { container } = render(
+      <MarkdownView content="[![架构图](https://example.com/diagram.png)](https://example.com/full)" />,
+    );
+
+    const link = screen.getByRole('link', { name: '架构图' });
+    expect(link).toHaveAttribute('href', 'https://example.com/full');
+    expect(link.querySelector('button')).toBeNull();
+    expect(screen.getByRole('button', { name: '放大查看图片“架构图”' }))
+      .toBeInTheDocument();
+    expect(container.querySelector('.resizable-image > .media-toolbar'))
+      .toBeInTheDocument();
   });
 });
 

@@ -17,6 +17,7 @@ import {
 import parse, { attributesToProps, domToReact, Element } from 'html-react-parser';
 import { createMarkdownSnapshot } from './pipeline';
 import CodeBlock from './CodeBlock';
+import MediaFrame from './MediaFrame';
 import { cancelHighlightSession, createHighlightSession } from './highlight';
 import 'katex/dist/katex.min.css';
 
@@ -64,11 +65,42 @@ function resolvedImageSource(source, resolveImageSource) {
   return resolveImageSource?.(src) || null;
 }
 
-function RuntimeImage({ source, ...props }) {
+function RuntimeImage({ source, framed = true, ...props }) {
   const { resolveImageSource } = useContext(MarkdownRuntimeContext);
   const src = resolvedImageSource(source, resolveImageSource);
   if (!src) return null;
-  return <img {...props} src={src} />;
+  if (!framed) return <img {...props} src={src} />;
+  const label = props.alt ? `图片“${props.alt}”` : '图片';
+  return (
+    <MediaFrame className="resizable-image" label={label}>
+      <img {...props} src={src} />
+    </MediaFrame>
+  );
+}
+
+function RuntimeLinkedImage({ imageNode, linkNode }) {
+  const imageProps = attributesToProps(imageNode.attribs || {});
+  const linkProps = attributesToProps(linkNode.attribs || {});
+  const source = imageProps.src;
+  delete imageProps.src;
+  delete imageProps.srcSet;
+  const label = imageProps.alt ? `图片“${imageProps.alt}”` : '图片';
+  return (
+    <MediaFrame className="resizable-image" label={label}>
+      <a {...linkProps}>
+        <RuntimeImage {...imageProps} source={source} framed={false} />
+      </a>
+    </MediaFrame>
+  );
+}
+
+function linkedImageChild(node) {
+  const meaningful = node.children.filter(
+    (child) => !(child.type === 'text' && !child.data.trim()),
+  );
+  if (meaningful.length !== 1) return null;
+  const [child] = meaningful;
+  return child instanceof Element && child.name === 'img' ? child : null;
 }
 
 function RuntimeCodeBlock({ code, language }) {
@@ -170,12 +202,25 @@ export default function MarkdownView({
         }
         if (!(node instanceof Element)) return undefined;
 
+        if (node.name === 'a') {
+          const imageNode = linkedImageChild(node);
+          if (imageNode) {
+            return <RuntimeLinkedImage imageNode={imageNode} linkNode={node} />;
+          }
+        }
+
         if (node.name === 'img') {
           const props = attributesToProps(node.attribs || {});
           const source = props.src;
           delete props.src;
           delete props.srcSet;
-          return <RuntimeImage {...props} source={source} />;
+          return (
+            <RuntimeImage
+              {...props}
+              source={source}
+              framed
+            />
+          );
         }
 
         // 代码块占位 → CodeBlock 组件

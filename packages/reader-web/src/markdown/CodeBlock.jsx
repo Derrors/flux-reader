@@ -7,6 +7,7 @@ import { writeClipboardText } from '../platform/clipboard';
 import { RENDER_FEATURES } from '../renderFeatures';
 import { highlightCode, isHugeCode } from './highlight';
 import Mermaid from './Mermaid';
+import { CheckIcon, CopyIcon } from './MediaFrame';
 
 const MAX_COLLAPSED_LINES = 20;
 
@@ -128,8 +129,14 @@ function HighlightedCodeBlock({ code, language, theme, highlightSessionId }) {
               {expanded ? '收起' : `展开 (${lineCount} 行)`}
             </button>
           )}
-          <button type="button" onClick={copy}>
-            {copied ? '已复制' : '复制'}
+          <button
+            type="button"
+            className={`code-copy-button${copied ? ' is-copied' : ''}`}
+            onClick={copy}
+            aria-label={copied ? '代码已复制' : '复制代码'}
+            title={copied ? '已复制' : '复制代码'}
+          >
+            {copied ? <CheckIcon /> : <CopyIcon />}
           </button>
         </span>
       </div>
