@@ -45,6 +45,7 @@ function buildReleaseNotes({ root = DEFAULT_ROOT } = {}) {
   const summary = readChineseSummary(root, version);
   const fpkAsset = `flux-reader-${version}.fpk`;
   const dmgAsset = `Flux-Reader-${version}-unnotarized-universal.dmg`;
+  const windowsAsset = `flux-reader-${version}-windows-x64.exe`;
 
   return [
     RELEASE_MARKER,
@@ -55,6 +56,7 @@ function buildReleaseNotes({ root = DEFAULT_ROOT } = {}) {
     '',
     `- \`${fpkAsset}\`：fnOS 安装包。`,
     `- \`${dmgAsset}\`：macOS 通用安装镜像（Intel 与 Apple Silicon）。`,
+    `- \`${windowsAsset}\`：Windows x64 安装程序。`,
     '- `SHA256SUMS`：安装包完整性校验文件。',
     '',
     '> [!WARNING]',

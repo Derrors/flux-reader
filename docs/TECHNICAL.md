@@ -431,7 +431,7 @@ lockfile 中的 `resolved` 域名不决定实际安装源；npm 会按本地 reg
 - macOS 标准自动 Release 的 DMG 未做 Developer ID 签名与 Apple 公证；正式分发应运行
   notarized workflow。
 - Windows 专用的 `ReplaceFileW`、WebView2 自定义协议、`ReadDirectoryChangesW` 行为及
-  MSI/NSIS 安装包仍需 Windows CI/实机验证；macOS arm64 只能覆盖通用 Rust 代码与契约。
+  NSIS EXE 安装包仍需 Windows CI/实机验证；macOS arm64 只能覆盖通用 Rust 代码与契约。
 - 高级 macOS 渲染依赖 WKWebView；资源加载失败时会降级为原生 `AttributedString` 预览，
   部分交互能力不可用。
 

@@ -234,7 +234,7 @@ jobs:
           overwrite: true
 
   build-windows:
-    name: Build Windows MSI
+    name: Build Windows NSIS EXE
     needs: metadata
     if: ${{ needs.metadata.outputs.release_state != 'complete' }}
     runs-on: windows-latest
@@ -275,7 +275,7 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
-      - name: Build and normalize Windows MSI
+      - name: Build and normalize Windows NSIS EXE
         working-directory: apps/windows/src-tauri
         env:
           WINDOWS_ASSET: ${{ needs.metadata.outputs.windows_asset }}
@@ -293,12 +293,12 @@ jobs:
           # --config 仅用于合并额外配置，这里无需传入。
           cargo tauri build
 
-          # Tauri 会在文件名中加入产品名、版本、架构与 MSI locale。Release 使用
+          # Tauri 会在 NSIS 文件名中加入产品名、版本与架构。Release 使用
           # 稳定的跨版本命名契约，因此只依赖官方 bundle 目录并严格校验唯一产物。
           shopt -s nullglob
-          installers=(target/release/bundle/msi/*.msi)
+          installers=(target/release/bundle/nsis/*.exe)
           if [[ "${#installers[@]}" -ne 1 ]]; then
-            echo "期望 Tauri 生成一个 MSI，实际为 ${#installers[@]} 个。" >&2
+            echo "期望 Tauri 生成一个 NSIS EXE，实际为 ${#installers[@]} 个。" >&2
             exit 1
           fi
 

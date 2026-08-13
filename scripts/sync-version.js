@@ -161,7 +161,7 @@ function releaseMetadata(version) {
     fpkAsset: `flux-reader-${version}.fpk`,
     dmgAsset: `Flux-Reader-${version}-unnotarized-universal.dmg`,
     signedDmgAsset: `Flux-Reader-${version}-universal.dmg`,
-    windowsAsset: `flux-reader-${version}-windows-x64.msi`,
+    windowsAsset: `flux-reader-${version}-windows-x64.exe`,
   };
 }
 

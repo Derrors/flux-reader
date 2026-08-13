@@ -26,6 +26,10 @@ cd apps/windows
 cargo tauri build
 ```
 
+生产构建仅生成 NSIS EXE 安装程序，产物位于
+`src-tauri/target/release/bundle/nsis/`。正式 GitHub Release 会将其统一命名为
+`flux-reader-<version>-windows-x64.exe`；不生成或发布 MSI。
+
 当前实现包括原生选择器、目录树、全文搜索、工作区状态，以及按
 `contracts/safe-save/v1` 执行的原子保存与显式恢复 sidecar 生命周期。本地图片通过
 `flux-reader-resource` 自定义协议读取；文件变化由 `notify` 的原生 Windows

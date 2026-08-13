@@ -70,7 +70,7 @@ test('keeps release tag and asset names in one versioned contract', () => {
     fpkAsset: 'flux-reader-1.2.3.fpk',
     dmgAsset: 'Flux-Reader-1.2.3-unnotarized-universal.dmg',
     signedDmgAsset: 'Flux-Reader-1.2.3-universal.dmg',
-    windowsAsset: 'flux-reader-1.2.3-windows-x64.msi',
+    windowsAsset: 'flux-reader-1.2.3-windows-x64.exe',
   });
 });
 

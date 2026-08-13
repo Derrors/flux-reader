@@ -40,6 +40,8 @@ test('generates Chinese release notes with versioned assets and warning', () => 
   assert.match(notes, /## 本次更新/);
   assert.match(notes, /flux-reader-1\.2\.3\.fpk/);
   assert.match(notes, /Flux-Reader-1\.2\.3-unnotarized-universal\.dmg/);
+  assert.match(notes, /flux-reader-1\.2\.3-windows-x64\.exe/);
+  assert.doesNotMatch(notes, /windows-x64\.msi/);
   assert.match(notes, /未经过 Apple 公证/);
   assert.doesNotMatch(notes, /Full Changelog|What's Changed/);
 });
