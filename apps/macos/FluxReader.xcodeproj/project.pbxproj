@@ -35,6 +35,7 @@
 		A3000000000000000000001A /* RetainedFileRecoveryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001F /* RetainedFileRecoveryStore.swift */; };
 		A3000000000000000000001B /* SafeSaveContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* SafeSaveContract.swift */; };
 		A3000000000000000000001C /* SafeSaveContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000021 /* SafeSaveContractTests.swift */; };
+		A3000000000000000000001D /* LiquidGlassStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000022 /* LiquidGlassStyle.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -88,6 +89,7 @@
 		A2000000000000000000001F /* RetainedFileRecoveryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetainedFileRecoveryStore.swift; sourceTree = "<group>"; };
 		A20000000000000000000020 /* SafeSaveContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeSaveContract.swift; sourceTree = "<group>"; };
 		A20000000000000000000021 /* SafeSaveContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeSaveContractTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000022 /* LiquidGlassStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiquidGlassStyle.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -151,6 +153,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000001 /* FluxReaderApp.swift */,
+				A20000000000000000000022 /* LiquidGlassStyle.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -388,6 +391,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A30000000000000000000001 /* FluxReaderApp.swift in Sources */,
+				A3000000000000000000001D /* LiquidGlassStyle.swift in Sources */,
 				A30000000000000000000002 /* ReaderView.swift in Sources */,
 				A30000000000000000000003 /* NativeMarkdownView.swift in Sources */,
 				A30000000000000000000004 /* ReaderViewModel.swift in Sources */,
@@ -567,7 +571,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.30;
+				MARKETING_VERSION = 0.1.31;
 				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -593,7 +597,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.30;
+				MARKETING_VERSION = 0.1.31;
 				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

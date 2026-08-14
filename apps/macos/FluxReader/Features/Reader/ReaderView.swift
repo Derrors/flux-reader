@@ -5,133 +5,149 @@ import UniformTypeIdentifiers
 struct ReaderView: View {
   @ObservedObject var viewModel: ReaderViewModel
   @Binding var appearance: AppAppearance
+  @Environment(\.colorScheme) private var colorScheme
   @StateObject private var splitScrollSynchronizer = SplitScrollSynchronizer()
   @State private var splitFraction = 0.5
   @State private var splitDragStartFraction: CGFloat?
 
   var body: some View {
-    NavigationSplitView {
-      sidebar
-    } detail: {
-      detail
-        .navigationTitle(navigationTitle)
-    }
-    .navigationSplitViewStyle(.balanced)
-    .frame(minWidth: 860, minHeight: 580)
-    .toolbar {
-      ToolbarItemGroup(placement: .primaryAction) {
-        if viewModel.currentDocument != nil {
-          if viewModel.isViewingRetainedRecoveryVersion {
-            Label("恢复版本（只读）", systemImage: "lock.fill")
-              .help("恢复版本只能查看；如需继续处理，请使用“另存为”创建新文稿")
-          } else {
-            Picker("文稿视图", selection: documentViewModeBinding) {
-              ForEach(ReaderViewModel.DocumentViewMode.allCases) { mode in
-                Label(mode.title, systemImage: mode.systemImage)
-                  .tag(mode)
+    ZStack {
+      FluxLiquidGlassBackdrop()
+
+      NavigationSplitView {
+        sidebar
+      } detail: {
+        detail
+          .navigationTitle(navigationTitle)
+          .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+          .fluxGlassSurface(.content, cornerRadius: 20)
+          .padding(8)
+      }
+      .navigationSplitViewStyle(.balanced)
+      .background(Color.clear)
+      .frame(minWidth: 860, minHeight: 580)
+      .toolbar {
+        ToolbarItemGroup(placement: .primaryAction) {
+          if viewModel.currentDocument != nil {
+            if viewModel.isViewingRetainedRecoveryVersion {
+              Label("恢复版本（只读）", systemImage: "lock.fill")
+                .help("恢复版本只能查看；如需继续处理，请使用“另存为”创建新文稿")
+            } else {
+              Picker("文稿视图", selection: documentViewModeBinding) {
+                ForEach(ReaderViewModel.DocumentViewMode.allCases) { mode in
+                  Label(mode.title, systemImage: mode.systemImage)
+                    .tag(mode)
+                }
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+              .frame(width: 190)
+              .help("切换预览、编辑或左右分栏")
+              .accessibilityIdentifier("flux.document-view-mode")
+            }
+
+            Button {
+              viewModel.presentFind()
+            } label: {
+              Label("查找", systemImage: "magnifyingglass")
+            }
+            .help("在当前文稿中查找（⌘F）")
+            .accessibilityIdentifier("flux.find")
+
+            if viewModel.hasUnsavedChanges {
+              Text("未保存")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("flux.dirty-indicator")
+            }
+
+            Button {
+              viewModel.save()
+            } label: {
+              if viewModel.isSaving {
+                ProgressView()
+                  .controlSize(.small)
+              } else {
+                Label("保存", systemImage: "square.and.arrow.down")
               }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 190)
-            .help("切换预览、编辑或左右分栏")
-            .accessibilityIdentifier("flux.document-view-mode")
-          }
+            .help("保存当前文稿")
+            .disabled(!viewModel.canSave)
+            .accessibilityIdentifier("flux.save")
 
-          Button {
-            viewModel.presentFind()
-          } label: {
-            Label("查找", systemImage: "magnifyingglass")
-          }
-          .help("在当前文稿中查找（⌘F）")
-          .accessibilityIdentifier("flux.find")
+            Menu {
+              Button("另存为…") {
+                viewModel.requestSaveAs()
+              }
+              .disabled(!viewModel.canSaveAs)
 
-          if viewModel.hasUnsavedChanges {
-            Text("未保存")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .accessibilityIdentifier("flux.dirty-indicator")
-          }
+              Button("还原到已保存版本", role: .destructive) {
+                viewModel.revertDraft()
+              }
+              .disabled(!viewModel.hasUnsavedChanges || viewModel.isSaving)
 
-          Button {
-            viewModel.save()
-          } label: {
-            if viewModel.isSaving {
-              ProgressView()
-                .controlSize(.small)
-            } else {
-              Label("保存", systemImage: "square.and.arrow.down")
+              Button("从磁盘重新载入…") {
+                viewModel.reloadFromDisk()
+              }
+              .disabled(viewModel.isSaving)
+            } label: {
+              Label("文稿操作", systemImage: "ellipsis.circle")
             }
+            .help("另存为或还原文稿")
+            .accessibilityIdentifier("flux.document-actions")
           }
-          .help("保存当前文稿")
-          .disabled(!viewModel.canSave)
-          .accessibilityIdentifier("flux.save")
 
           Menu {
-            Button("另存为…") {
-              viewModel.requestSaveAs()
+            ForEach(AppAppearance.allCases) { option in
+              Button {
+                appearance = option
+              } label: {
+                Label(
+                  option.title,
+                  systemImage: appearance == option ? "checkmark" : option.systemImage
+                )
+              }
             }
-            .disabled(!viewModel.canSaveAs)
-
-            Button("还原到已保存版本", role: .destructive) {
-              viewModel.revertDraft()
-            }
-            .disabled(!viewModel.hasUnsavedChanges || viewModel.isSaving)
-
-            Button("从磁盘重新载入…") {
-              viewModel.reloadFromDisk()
-            }
-            .disabled(viewModel.isSaving)
           } label: {
-            Label("文稿操作", systemImage: "ellipsis.circle")
+            Label("切换外观", systemImage: appearance.systemImage)
+              .labelStyle(.iconOnly)
           }
-          .help("另存为或还原文稿")
-          .accessibilityIdentifier("flux.document-actions")
-        }
+          .help("切换跟随系统、浅色或深色外观")
+          .accessibilityIdentifier("flux.appearance")
+          .accessibilityValue(appearance.title)
 
-        Menu {
-          ForEach(AppAppearance.allCases) { option in
+          if !viewModel.workspaces.isEmpty {
             Button {
-              appearance = option
+              viewModel.refreshAllWorkspaces()
             } label: {
-              Label(
-                option.title,
-                systemImage: appearance == option ? "checkmark" : option.systemImage
-              )
+              Label("刷新文件夹", systemImage: "arrow.clockwise")
             }
+            .help("立即刷新全部文件夹；平时会自动监听变化")
           }
-        } label: {
-          Label("切换外观", systemImage: appearance.systemImage)
-            .labelStyle(.iconOnly)
-        }
-        .help("切换跟随系统、浅色或深色外观")
-        .accessibilityIdentifier("flux.appearance")
-        .accessibilityValue(appearance.title)
 
-        if !viewModel.workspaces.isEmpty {
           Button {
-            viewModel.refreshAllWorkspaces()
+            viewModel.presentFolderImporter()
           } label: {
-            Label("刷新文件夹", systemImage: "arrow.clockwise")
+            Label("打开文件夹", systemImage: "folder.badge.plus")
           }
-          .help("立即刷新全部文件夹；平时会自动监听变化")
-        }
+          .help("打开 Markdown 文件夹")
 
-        Button {
-          viewModel.presentFolderImporter()
-        } label: {
-          Label("打开文件夹", systemImage: "folder.badge.plus")
+          Button {
+            viewModel.presentFileImporter()
+          } label: {
+            Label("打开文件", systemImage: "doc.badge.plus")
+          }
+          .help("打开 Markdown 文稿")
         }
-        .help("打开 Markdown 文件夹")
-
-        Button {
-          viewModel.presentFileImporter()
-        } label: {
-          Label("打开文件", systemImage: "doc.badge.plus")
-        }
-        .help("打开 Markdown 文稿")
       }
+      .toolbarBackground(
+        FluxLiquidGlassPalette.toolbarBackground(for: colorScheme),
+        for: .windowToolbar
+      )
+      .toolbarBackground(.visible, for: .windowToolbar)
+      .toolbarColorScheme(colorScheme, for: .windowToolbar)
     }
+    .background(FluxGlassWindowConfigurator().allowsHitTesting(false))
     .fileImporter(
       isPresented: $viewModel.isImporterPresented,
       allowedContentTypes: viewModel.importerRequest == .document
@@ -320,6 +336,8 @@ struct ReaderView: View {
     .accessibilityIdentifier("flux.sidebar")
     .navigationTitle("Flux Reader")
     .navigationSplitViewColumnWidth(min: 220, ideal: 280, max: 380)
+    .scrollContentBackground(.hidden)
+    .background(FluxGlassSidebarBackground())
   }
 
   @ViewBuilder
@@ -542,16 +560,18 @@ struct ReaderView: View {
           onActivate: viewModel.activateTab,
           onClose: viewModel.requestCloseTab
         )
-        Divider()
       }
 
       if viewModel.isFindPresented, viewModel.currentDocument != nil {
         DocumentFindBar(viewModel: viewModel)
-        Divider()
+          .padding(.horizontal, 10)
+          .padding(.top, 8)
+          .padding(.bottom, 6)
       }
 
       detailContent
     }
+    .background(Color.clear)
   }
 
   @ViewBuilder
@@ -581,7 +601,7 @@ struct ReaderView: View {
           }
           .padding(.horizontal, 16)
           .padding(.vertical, 10)
-          .background(.bar)
+          .fluxGlassBar()
           Divider()
         }
 
@@ -677,7 +697,9 @@ struct ReaderView: View {
         .accessibilityIdentifier("flux.open-folder")
       }
     }
-    .padding(32)
+    .padding(34)
+    .fluxGlassSurface(.floating, cornerRadius: 26)
+    .padding(28)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
@@ -730,7 +752,7 @@ private struct DocumentLoadingOverlay: View {
   var body: some View {
     ZStack {
       Color(nsColor: .windowBackgroundColor)
-        .opacity(0.82)
+        .opacity(0.46)
       VStack(spacing: 12) {
         ProgressView()
           .controlSize(.regular)
@@ -741,7 +763,7 @@ private struct DocumentLoadingOverlay: View {
       }
       .padding(.horizontal, 22)
       .padding(.vertical, 16)
-      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+      .fluxGlassSurface(.floating, cornerRadius: 14)
     }
     .accessibilityElement(children: .combine)
     .accessibilityLabel("正在打开 \(fileName)")
@@ -857,9 +879,10 @@ private struct DocumentTabBar: View {
           .padding(.vertical, 7)
           .background(
             activeTabID == tab.id
-              ? Color.accentColor.opacity(0.16) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 7)
+              ? Color.accentColor.opacity(0.10) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
           )
+          .fluxActiveGlass(activeTabID == tab.id)
           .overlay(alignment: .bottom) {
             if activeTabID == tab.id {
               Rectangle()
@@ -872,7 +895,7 @@ private struct DocumentTabBar: View {
       .padding(.horizontal, 8)
       .padding(.vertical, 5)
     }
-    .background(.bar)
+    .fluxGlassBar()
     .accessibilityElement(children: .contain)
     .accessibilityLabel("打开的文稿")
   }
@@ -962,7 +985,7 @@ private struct DocumentFindBar: View {
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
-    .background(.bar)
+    .fluxGlassSurface(.floating, cornerRadius: 14)
     .onAppear { queryFocused = true }
     .accessibilityElement(children: .contain)
     .accessibilityLabel("文稿内查找与替换")
@@ -1027,7 +1050,7 @@ private struct MarkdownEditorView: View {
       .foregroundStyle(.secondary)
       .padding(.horizontal, 12)
       .padding(.vertical, 7)
-      .background(.bar)
+      .fluxGlassBar()
     }
   }
 }

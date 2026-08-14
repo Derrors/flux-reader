@@ -75,7 +75,7 @@ private struct RenderLoadingOverlay: View {
   var body: some View {
     ZStack {
       Color(nsColor: .textBackgroundColor)
-        .opacity(hasPreviousContent ? 0.72 : 1)
+        .opacity(hasPreviousContent ? 0.52 : 0.82)
       VStack(spacing: 10) {
         ProgressView()
           .controlSize(.small)
@@ -83,6 +83,9 @@ private struct RenderLoadingOverlay: View {
           .font(.caption)
           .foregroundStyle(.secondary)
       }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 14)
+      .fluxGlassSurface(.floating, cornerRadius: 14)
     }
     .allowsHitTesting(false)
     .accessibilityElement(children: .combine)
@@ -112,6 +115,6 @@ private struct DocumentStatusBar: View {
     .foregroundStyle(.secondary)
     .padding(.horizontal, 12)
     .padding(.vertical, 7)
-    .background(.bar)
+    .fluxGlassBar()
   }
 }

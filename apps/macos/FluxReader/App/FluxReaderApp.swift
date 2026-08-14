@@ -176,6 +176,12 @@ final class FluxReaderApplicationDelegate: NSObject, NSApplicationDelegate {
   private var isTerminationPending = false
   private var terminationTask: Task<Void, Never>?
 
+  func applicationShouldTerminateAfterLastWindowClosed(
+    _ sender: NSApplication
+  ) -> Bool {
+    true
+  }
+
   func applicationShouldTerminate(
     _ sender: NSApplication
   ) -> NSApplication.TerminateReply {

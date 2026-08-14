@@ -561,6 +561,17 @@ final class ReaderViewModelTests: XCTestCase {
   }
 
   @MainActor
+  func testClosingLastWindowTerminatesApplication() {
+    let applicationDelegate = FluxReaderApplicationDelegate()
+
+    XCTAssertTrue(
+      applicationDelegate.applicationShouldTerminateAfterLastWindowClosed(
+        NSApplication.shared
+      )
+    )
+  }
+
+  @MainActor
   func testTerminationWaitsForInFlightSaveAndKeepsRecoveryUntilCommit() async throws {
     let markdownURL = temporaryDirectory.appendingPathComponent("guide.md")
     try Data("# Original".utf8).write(to: markdownURL)

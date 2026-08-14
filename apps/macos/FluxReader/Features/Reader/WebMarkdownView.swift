@@ -128,6 +128,7 @@ struct WebMarkdownView: NSViewRepresentable {
 
     let webView = WKWebView(frame: .zero, configuration: configuration)
     webView.alphaValue = Self.isHandoffEnabled ? 0 : 1
+    webView.underPageBackgroundColor = .clear
     webView.allowsMagnification = true
     webView.navigationDelegate = context.coordinator
     webView.uiDelegate = context.coordinator
