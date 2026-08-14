@@ -35,7 +35,8 @@ function readChineseSummary(root, platform, version) {
     source = fs.readFileSync(summaryPath, 'utf8');
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      throw new Error(`缺少 ${path.relative(root, summaryPath)}，请先编写本平台版本的中文更新摘要`);
+      const displayPath = path.relative(root, summaryPath).replace(/\\/g, '/');
+      throw new Error(`缺少 ${displayPath}，请先编写本平台版本的中文更新摘要`);
     }
     throw error;
   }
