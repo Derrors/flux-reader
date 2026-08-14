@@ -102,7 +102,7 @@ GitHub 的 `Notarized macOS Release` 手动工作流使用以下 Actions secrets
 - `APPLE_NOTARY_KEY_ID`：API key ID
 - `APPLE_NOTARY_ISSUER_ID`：团队 key 的 issuer UUID；Individual key 可留空
 
-先等待标准 `Release` 工作流发布同版本 tag，再手动运行公证工作流。它不会覆盖已有
+先等待 `Release macOS` 工作流发布同版本 `macos/v<version>` tag，再手动运行公证工作流。它不会覆盖已有
 资产，而是把正式 DMG 与独立 `.sha256` 文件附加到同一 GitHub Release。
 
 ## 当前架构

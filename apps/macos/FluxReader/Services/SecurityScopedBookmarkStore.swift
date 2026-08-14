@@ -63,8 +63,8 @@ final class SecurityScopedBookmarkStore: BookmarkStoring {
   init(
     defaults: UserDefaults = .standard,
     namespace: String = "com.derrors.fluxreader.library",
-    maximumWorkspaceCount: Int = 8,
-    maximumRecentCount: Int = 12,
+    maximumWorkspaceCount: Int = ProductPolicy.maximumWorkspaceCount,
+    maximumRecentCount: Int = ProductPolicy.maximumRecentDocuments,
     codec: SecurityScopedBookmarkCodec = .live
   ) {
     self.defaults = defaults

@@ -36,6 +36,7 @@
 		A3000000000000000000001B /* SafeSaveContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* SafeSaveContract.swift */; };
 		A3000000000000000000001C /* SafeSaveContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000021 /* SafeSaveContractTests.swift */; };
 		A3000000000000000000001D /* LiquidGlassStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000022 /* LiquidGlassStyle.swift */; };
+		A3000000000000000000001E /* ProductPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000023 /* ProductPolicy.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -90,6 +91,7 @@
 		A20000000000000000000020 /* SafeSaveContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeSaveContract.swift; sourceTree = "<group>"; };
 		A20000000000000000000021 /* SafeSaveContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeSaveContractTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000022 /* LiquidGlassStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiquidGlassStyle.swift; sourceTree = "<group>"; };
+		A20000000000000000000023 /* ProductPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductPolicy.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -182,6 +184,7 @@
 		A10000000000000000000008 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				A20000000000000000000023 /* ProductPolicy.swift */,
 				A20000000000000000000005 /* MarkdownDocument.swift */,
 				A20000000000000000000006 /* MarkdownContentType.swift */,
 				A20000000000000000000010 /* LibraryModels.swift */,
@@ -395,6 +398,7 @@
 				A30000000000000000000002 /* ReaderView.swift in Sources */,
 				A30000000000000000000003 /* NativeMarkdownView.swift in Sources */,
 				A30000000000000000000004 /* ReaderViewModel.swift in Sources */,
+				A3000000000000000000001E /* ProductPolicy.swift in Sources */,
 				A30000000000000000000005 /* MarkdownDocument.swift in Sources */,
 				A30000000000000000000006 /* MarkdownContentType.swift in Sources */,
 				A30000000000000000000007 /* LocalFileService.swift in Sources */,
@@ -571,7 +575,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.31;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -597,7 +601,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.31;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.derrors.fluxreader;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

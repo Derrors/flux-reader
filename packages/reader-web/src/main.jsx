@@ -1,6 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './App';
+import FnOSApp from './apps/FnOSApp';
 import { applyRenderFeatureFlags } from './renderFeatures';
 import './styles/app.css';
 import './styles/markdown.css';
@@ -15,7 +15,7 @@ if (import.meta.env.MODE === 'contract-fnos') {
 } else {
   root.render(
     <React.StrictMode>
-      <App />
+      <FnOSApp />
     </React.StrictMode>,
   );
 }

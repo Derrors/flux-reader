@@ -32,8 +32,20 @@ App，并以 Tauri IPC 替换 HTTP transport；macOS 使用 SwiftUI 原生外壳
 | Windows | React / Vite 完整 App | Tauri 2、Rust、WebView2 | 共享 `reader-web` |
 | macOS | SwiftUI / AppKit | 原生文件服务、FSEvents、安全书签 | WKWebView 中的共享 `reader-web` |
 
-Node 子项目分别保留 lockfile，根目录脚本负责统一调度。这样既能共享渲染、编辑和组件，
-又不会破坏 fnOS 独立安装生产依赖及 Xcode 嵌入 Web 产物的流程。
+Node 子项目分别保留 lockfile，根目录脚本负责统一调度。共享边界只覆盖 Markdown 语义、
+渲染组件、跨平台保存结果契约和可复用状态机；窗口、授权、文件系统、菜单、恢复存储与
+平台 UI 由各客户端自行组合。平台能力通过版本化 `/env` 契约注入，而不是在共享组件中
+根据 User-Agent 或平台名称猜测。
+
+### 架构原则
+
+1. **共享能力，不共享宿主体验**：`reader-web` 提供渲染内核和 Web 工作流，但 macOS 保持
+   SwiftUI/AppKit 优先；fnOS 与 Windows 也通过各自组合入口注入平台文案和能力。
+2. **Capability 驱动**：宿主通过 `capabilitySchemaVersion`、`capabilities` 和 `policy` 声明
+   安全保存、文件监听、授权周期、文档大小与工作区/标签上限。
+3. **平台独立发布**：三个版本源、Tag 和 Release 互不绑定；共享改动只在 CI 中扇出验证，
+   不强迫所有平台同时发版。
+4. **契约优先**：保存结果、渲染 corpus、transport 形状先形成契约，再由各平台实现。
 
 ## 技术选型
 
@@ -83,12 +95,13 @@ flux-reader/
 │       └── src/
 │           ├── markdown/               Markdown 渲染核心
 │           ├── components/             标签页、查找、目录与工作区组件
-│           ├── windows-main.jsx         Windows 完整 React App 入口
-│           ├── platform/                HTTP / Tauri transport 与路径适配
+│           ├── apps/                    fnOS / Windows 组合入口
+│           ├── windows-main.jsx         Windows Bootstrap
+│           ├── platform/                capability、策略、HTTP / Tauri transport
 │           ├── macos-main.jsx          macOS 独立渲染入口
 │           └── macos/                  原生 payload bridge
 ├── scripts/                            构建、版本同步与发布测试
-├── VERSION                             发布版本唯一来源
+├── versions/                           fnos / macos / windows 独立版本源
 └── package.json                        monorepo 调度脚本
 ```
 
@@ -191,17 +204,22 @@ Rust 的 CI 中运行 `cargo test --manifest-path apps/windows/src-tauri/Cargo.t
 fnOS contract 构建、macOS contract 构建、Chromium 和真实 WKWebView 均读取同一份
 `manifest.json`；KaTeX 断言 MathML，Mermaid 与 Shiki 使用显式完成状态，不依赖固定 sleep。
 
-GitHub Actions 分为：
+GitHub Actions 由中央 `CI` 先计算受影响项目，再调用三个可复用质量工作流：
 
-- `fnOS CI`：Ubuntu + Node.js 22，执行版本校验、全部 Node 测试和 fnOS 生产构建。
-- `macOS CI`：macOS 26，执行共享阅读器测试、Swift lint、原生测试与 UI 自动化。
-- `Release`：在 `main` 上构建 `.fpk` 与未公证 Universal `.dmg` 并创建 Release。
-- `Notarized macOS Release`：配置 Apple 凭据后手动构建签名、公证的 DMG。
+- 共享阅读器、保存契约或全局构建脚本变化：扇出 fnOS、macOS、Windows。
+- `apps/<platform>`、`versions/<platform>` 或平台构建脚本变化：只验证对应平台。
+- 纯文档变化：不消耗平台 runner。
+
+三个 `Release <platform>` 工作流均只允许从 `main` 手动触发，并先复用对应质量门禁。
+`Notarized macOS Release` 仍是独立的 Apple Developer ID 签名与公证流程。
 
 ## 构建与打包
 
 ```bash
-npm run version:check                # 校验各平台版本一致
+npm run version:check                # 校验三个独立版本源与平台清单
+npm run version:check:fnos           # 只校验 fnOS
+npm run version:check:macos          # 只校验 macOS
+npm run version:check:windows        # 只校验 Windows
 npm run build:fnos                   # 生成 fnOS package/app
 npm run build:macos-renderer         # 构建 WKWebView 共享阅读器
 npm run build:windows-renderer       # 构建 WebView2 完整 React App
@@ -223,27 +241,27 @@ Developer ID 签名、公证需要的变量与 GitHub secrets 见
 
 ## 版本与 GitHub Release
 
-根目录 `VERSION` 是 fnOS manifest、macOS `MARKETING_VERSION`、Windows Cargo package 与
-Tauri config 的唯一版本来源。
-准备新版本时：
+`versions/fnos`、`versions/macos`、`versions/windows` 分别是三个发布版本的唯一来源。
+准备某个平台的新版本时：
 
 ```bash
-# 修改 VERSION 后
-npm run version:sync
-# 编写 docs/releases/<version>.md 中文更新摘要
-npm run test:all
+# 例如发布 macOS：修改 versions/macos 后
+npm run version:sync:macos
+# 编写 docs/releases/macos/<version>.md 中文更新摘要
+npm run version:check:macos
+npm run test:reader
+npm run test:macos
 ```
 
-代码合入 `main` 后，`Release` 工作流会：
+代码合入 `main` 后，手动运行对应的 `Release <platform>` 工作流。它会：
 
-1. 校验版本与 tag 状态。
-2. 并行构建 `flux-reader-<version>.fpk` 和
-   `Flux-Reader-<version>-unnotarized-universal.dmg`。
-3. 生成 `SHA256SUMS`。
-4. 读取 `docs/releases/<version>.md`，生成中文更新说明。
-5. 创建 `v<version>` GitHub Release。
+1. 校验该平台版本、中文摘要、Tag 与 Release 状态。
+2. 重新执行该平台完整质量门禁。
+3. 只构建该平台资产并生成 `SHA256SUMS`。
+4. 创建 `<platform>/v<version>` GitHub Release。
 
-版本摘要必须存在、非空并包含中文；`npm run version:check` 和 Release 工作流都会校验。
+版本摘要必须存在、非空并包含中文；历史 `docs/releases/<version>.md` 保留作为旧统一版本
+发布记录，新版本统一放在 `docs/releases/<platform>/<version>.md`。
 发布正文不会调用 GitHub 的英文自动说明，而是保留维护者编写的中文概括，并统一追加下载
 文件说明与未公证 macOS 构建警告。
 

@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 
 use crate::{
     error::ApiError,
-    file_access::AuthorizationStore,
+    file_access::{AuthorizationStore, MAX_DOCUMENT_BYTES, MAX_IMAGE_BYTES},
     request_registry::CancellationToken,
     safe_save::{
         RecoveryCommitRequest, SafeSaveService, MAX_RECOVERY_BYTES_PER_DOCUMENT,
@@ -128,6 +128,7 @@ pub fn dispatch(
             "uid": "windows-local",
             "mode": "tauri",
             "platform": "windows",
+            "capabilitySchemaVersion": 1,
             "capabilities": {
                 "nativeDialog": true,
                 "sessionScopedAuthorization": true,
@@ -148,6 +149,12 @@ pub fn dispatch(
                     "maxTransactionsPerDocument": MAX_RECOVERY_TRANSACTIONS_PER_DOCUMENT,
                     "maxBytesPerDocument": MAX_RECOVERY_BYTES_PER_DOCUMENT
                 }
+            },
+            "policy": {
+                "maxEditableDocumentBytes": MAX_DOCUMENT_BYTES,
+                "maxLocalImageBytes": MAX_IMAGE_BYTES,
+                "maxWorkspaces": 8,
+                "maxDocumentTabs": 12
             }
         })),
         ("GET", "/list") => {
@@ -284,12 +291,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["platform"], "windows");
+        assert_eq!(result["capabilitySchemaVersion"], 1);
         assert_eq!(result["capabilities"]["safeSave"], true);
         assert_eq!(result["capabilities"]["recovery"], true);
         assert_eq!(result["capabilities"]["sessionScopedAuthorization"], true);
         assert_eq!(result["capabilities"]["workspaceSearch"], true);
         assert_eq!(result["capabilities"]["localResources"], true);
         assert_eq!(result["capabilities"]["fileWatching"], true);
+        assert_eq!(
+            result["policy"]["maxEditableDocumentBytes"],
+            MAX_DOCUMENT_BYTES
+        );
+        assert_eq!(result["policy"]["maxLocalImageBytes"], MAX_IMAGE_BYTES);
+        assert_eq!(result["policy"]["maxWorkspaces"], 8);
+        assert_eq!(result["policy"]["maxDocumentTabs"], 12);
         assert_eq!(
             result["capabilities"]["recoveryPolicy"]["automaticExpiry"],
             false

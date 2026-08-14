@@ -15,14 +15,9 @@ import {
 } from './recent-documents';
 import { readDraft, removeDraft, writeDraft } from './draft-storage';
 import {
-  MAX_DOCUMENT_TABS,
   readDocumentSession,
   writeDocumentSession,
 } from './document-session';
-import {
-  MAX_EDITABLE_DOCUMENT_BYTES,
-  MAX_EDITABLE_DOCUMENT_MIB,
-} from './limits';
 import { isSaveConflict, requiresSaveRecovery } from './saveOutcome';
 import { useLatestPreviewContent } from './useLatestPreviewContent';
 import {
@@ -32,8 +27,9 @@ import {
   isAbsoluteHostPath,
   normalizeHostRoot,
 } from './platform/path';
+import { normalizeEnvironment, normalizeProductPolicy } from './platform/environment';
+import { FNOS_APP_PROFILE } from './platform/profiles';
 
-const MAX_WORKSPACES = 8;
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const FOCUS_REFRESH_DELAY_MS = 150;
 const FILE_CHANGE_REFRESH_DELAY_MS = 120;
@@ -358,7 +354,11 @@ function normalizeSearchResults(data, workspaces) {
   }).slice(0, 100);
 }
 
-export default function App() {
+export default function App({ profile = FNOS_APP_PROFILE }) {
+  const defaultPolicy = useMemo(
+    () => normalizeProductPolicy(profile.defaultPolicy),
+    [profile.defaultPolicy],
+  );
   const [theme, setTheme] = useState('light');
   const [env, setEnv] = useState(null);
   // Workspaces are deliberately session-only. Ordinary startup never enumerates
@@ -398,6 +398,8 @@ export default function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
+  const policy = env?.policy || defaultPolicy;
+  const maxWorkspaces = policy.maxWorkspaces;
 
   const launchPathRef = useRef(readLaunchPath());
   const isFileLaunch = launchPathRef.current !== null;
@@ -419,6 +421,7 @@ export default function App() {
   const deferredRecentsRef = useRef([]);
   const removedRecentIdentitiesRef = useRef(new Set());
   const searchRequestSeqRef = useRef(0);
+  const policyRef = useRef(policy);
   const envRef = useRef(env);
   const workspacesRef = useRef(workspaces);
   const currentRef = useRef(current);
@@ -442,6 +445,7 @@ export default function App() {
       ? draft !== content
       : current?.contentUnavailable === true
   );
+  policyRef.current = policy;
   const safeSaveAvailable = env?.capabilities?.safeSave !== false;
   const sessionScopedAuthorization = env?.capabilities?.sessionScopedAuthorization === true;
   const renderedContent = draft ?? content;
@@ -570,7 +574,9 @@ export default function App() {
   const updateTabs = useCallback((updater) => {
     const previous = tabsRef.current;
     const next = typeof updater === 'function' ? updater(previous) : updater;
-    tabsRef.current = Array.isArray(next) ? next.slice(0, MAX_DOCUMENT_TABS) : previous;
+    tabsRef.current = Array.isArray(next)
+      ? next.slice(0, policyRef.current.maxDocumentTabs)
+      : previous;
     setTabs(tabsRef.current);
     return tabsRef.current;
   }, []);
@@ -725,16 +731,14 @@ export default function App() {
       return Promise.resolve(false);
     }
     if (selected.writable === false) {
-      setError(envRef.current?.capabilities?.sessionScopedAuthorization === true
-        ? '当前文稿为只读；请检查 Windows 文件权限后重试'
-        : '当前文稿为只读；请在 fnOS 应用设置中授予读写权限后重试');
+      setError(profile.readOnlySaveMessage);
       return Promise.resolve(false);
     }
     const contentBytes = new TextEncoder().encode(snapshotContent).byteLength;
-    if (contentBytes > MAX_EDITABLE_DOCUMENT_BYTES) {
+    if (contentBytes > policyRef.current.maxEditableDocumentBytes) {
       setError(
         `文稿为 ${(contentBytes / 1024 / 1024).toFixed(1)} MiB，` +
-        `超过 ${MAX_EDITABLE_DOCUMENT_MIB} MiB 保存上限`,
+        `超过 ${policyRef.current.maxEditableDocumentBytes / 1024 / 1024} MiB 保存上限`,
       );
       return Promise.resolve(false);
     }
@@ -1023,7 +1027,13 @@ export default function App() {
 
   useEffect(() => {
     if (!sessionRestoredRef.current || env?.uid == null) return;
-    writeDocumentSession(env.uid, tabs, activeTabId);
+    writeDocumentSession(
+      env.uid,
+      tabs,
+      activeTabId,
+      undefined,
+      policyRef.current.maxDocumentTabs,
+    );
   }, [activeTabId, env?.uid, tabs]);
 
   useEffect(() => {
@@ -1081,7 +1091,13 @@ export default function App() {
           );
         }
       }
-      writeDocumentSession(envRef.current?.uid, sessionTabs, activeId);
+      writeDocumentSession(
+        envRef.current?.uid,
+        sessionTabs,
+        activeId,
+        undefined,
+        policyRef.current.maxDocumentTabs,
+      );
     };
     const onBeforeUnload = (event) => {
       const hasDirtyTab = dirtyRef.current || tabsRef.current.some((tab) => tab.dirty);
@@ -1302,7 +1318,7 @@ export default function App() {
         currentRef.current?.path !== documentPath
       ) return;
       if (diskState.writable === false) {
-        throw new Error('当前文稿仍为只读；请在 fnOS 应用设置中授予读写权限后重试');
+        throw new Error(profile.readOnlySaveMessage);
       }
       const expectedRevision = fileRevision(diskState);
       if (!expectedRevision) throw new Error('无法取得当前磁盘 revision，恢复已取消');
@@ -1553,8 +1569,8 @@ export default function App() {
       applyTabSnapshot(refreshedTab || existingTab);
       return true;
     }
-    if (!existingTab && tabsRef.current.length >= MAX_DOCUMENT_TABS) {
-      setError(`最多同时打开 ${MAX_DOCUMENT_TABS} 个文稿，请先关闭一个标签页。`);
+    if (!existingTab && tabsRef.current.length >= policyRef.current.maxDocumentTabs) {
+      setError(`最多同时打开 ${policyRef.current.maxDocumentTabs} 个文稿，请先关闭一个标签页。`);
       return false;
     }
     const previousTabId = activeTabIdRef.current;
@@ -1960,8 +1976,8 @@ export default function App() {
       const alreadyOpen = workspacesRef.current.some((item) => (
         item.path === folderPath || workspaceActualPath(item) === actualPath
       ));
-      if (!alreadyOpen && workspacesRef.current.length >= MAX_WORKSPACES) {
-        setError(`最多同时打开 ${MAX_WORKSPACES} 个工作区，请先关闭一个再添加。`);
+      if (!alreadyOpen && workspacesRef.current.length >= policyRef.current.maxWorkspaces) {
+        setError(`最多同时打开 ${policyRef.current.maxWorkspaces} 个工作区，请先关闭一个再添加。`);
         return false;
       }
       for (const existing of workspacesRef.current) {
@@ -2412,7 +2428,7 @@ export default function App() {
       await initSdk();
       if (!active) return;
       try {
-        const nextEnv = await api.env();
+        const nextEnv = normalizeEnvironment(await api.env(), profile.id);
         if (!active) return;
         envRef.current = nextEnv;
         setEnv(nextEnv);
@@ -2445,7 +2461,7 @@ export default function App() {
       sessionRestoredRef.current = true;
       return;
     }
-    const session = readDocumentSession(env.uid);
+    const session = readDocumentSession(env.uid, undefined, policyRef.current.maxDocumentTabs);
     sessionRestoredRef.current = true;
     if (session.tabs.length === 0) return;
     const restoredTabs = session.tabs.map((tab) => ({ ...tab, loaded: false }));
@@ -2688,7 +2704,7 @@ export default function App() {
     : (sidebarOpen ? '隐藏最近文稿' : '显示最近文稿');
 
   return (
-    <div className="app fnos-reader" data-theme={theme}>
+    <div className={`app ${profile.rootClassName}`} data-theme={theme} data-platform={env?.platform || profile.id}>
       <header className="app-header">
         {!isFileLaunch && hasSidebarContent && (
           <button
@@ -2763,8 +2779,8 @@ export default function App() {
               onClick={onOpenFolder}
               disabled={pickingFolder || pickingFile}
               title={sessionScopedAuthorization
-                ? `选择文件夹并授权本次会话访问（最多 ${MAX_WORKSPACES} 个工作区）`
-                : `选择已授权文件夹（最多 ${MAX_WORKSPACES} 个工作区）`}
+                ? `选择文件夹并授权本次会话访问（最多 ${maxWorkspaces} 个工作区）`
+                : `选择已授权文件夹（最多 ${maxWorkspaces} 个工作区）`}
             >
               {pickingFolder ? '选择中…' : '打开文件夹'}
             </button>
@@ -2858,12 +2874,7 @@ export default function App() {
 
           {hasDocument && current?.writable === false && !error && (
             <div className="notice" role="status">
-              {sessionScopedAuthorization
-                ? '当前文稿只读。如需编辑，请在 Windows 文件属性或安全设置中授予写入权限。'
-                : (
-                  <>当前文稿只读。如需编辑，请在 fnOS「系统设置 → 应用 → Flux Reader →
-                    访问权限」中将目录调整为读写。</>
-                )}
+              {profile.readOnlyNotice}
             </div>
           )}
 
@@ -2882,7 +2893,7 @@ export default function App() {
                   ? isFileLaunch
                     ? '点击「打开文件」选择另一个 Markdown 文档。'
                     : '点击「打开文件」直接阅读 Markdown，或点击「打开文件夹」浏览已授权目录。'
-                  : '当前不在 fnOS 环境中，请安装到 fnOS 后打开已授权的 Markdown 文档。'}
+                  : profile.unavailableMessage}
               </p>
             </div>
           )}

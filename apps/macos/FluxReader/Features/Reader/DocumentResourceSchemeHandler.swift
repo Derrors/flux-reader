@@ -89,7 +89,7 @@ struct LoadedDocumentResource: Sendable {
 }
 
 struct DocumentResourceLoader: Sendable {
-  static let maximumFileSize = 25 * 1_024 * 1_024
+  static let maximumFileSize = ProductPolicy.maximumLocalImageBytes
   static let supportedExtensions: Set<String> = [
     "avif", "bmp", "gif", "heic", "heif", "jpeg", "jpg", "png", "tif", "tiff",
     "webp",

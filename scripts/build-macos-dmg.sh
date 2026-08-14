@@ -3,7 +3,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="$(tr -d '\r\n' < "$PROJECT_ROOT/VERSION")"
+VERSION="$(tr -d '\r\n' < "$PROJECT_ROOT/versions/macos")"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/release}"
 DERIVED_DATA="${DERIVED_DATA:-$PROJECT_ROOT/.build/macos-release}"
@@ -63,7 +63,7 @@ if [[ -n "${DMG_ASSET:-}" && "$DMG_ASSET" != "$DMG_NAME" ]]; then
   exit 1
 fi
 
-node "$PROJECT_ROOT/scripts/sync-version.js" --check
+node "$PROJECT_ROOT/scripts/sync-version.js" --check --platform macos
 mkdir -p "$OUTPUT_DIR"
 
 xcodebuild \

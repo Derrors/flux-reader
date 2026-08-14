@@ -2,29 +2,40 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const {
+  PLATFORM_IDS,
+  readVersionSource,
+  releaseMetadata,
+} = require('./sync-version');
 
 const DEFAULT_ROOT = path.resolve(__dirname, '..');
-const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const CHINESE_TEXT_PATTERN = /[\u3400-\u9fff]/u;
-const RELEASE_MARKER = '<!-- flux-reader-release-workflow -->';
 const MAX_SUMMARY_BYTES = 64 * 1024;
+const PLATFORM_LABELS = Object.freeze({
+  fnos: 'fnOS',
+  macos: 'macOS',
+  windows: 'Windows',
+});
 
-function readVersion(root) {
-  const source = fs.readFileSync(path.join(root, 'VERSION'), 'utf8').trim();
-  if (!VERSION_PATTERN.test(source)) {
-    throw new Error(`VERSION 不是有效的三段版本号：${JSON.stringify(source)}`);
+function assertPlatform(platform) {
+  if (!PLATFORM_IDS.includes(platform)) {
+    throw new Error(`必须通过 --platform 指定 ${PLATFORM_IDS.join('、')} 之一`);
   }
-  return source;
+  return platform;
 }
 
-function readChineseSummary(root, version) {
-  const summaryPath = path.join(root, 'docs', 'releases', `${version}.md`);
+function releaseMarker(platform) {
+  return `<!-- flux-reader-release-workflow:${assertPlatform(platform)} -->`;
+}
+
+function readChineseSummary(root, platform, version) {
+  const summaryPath = path.join(root, 'docs', 'releases', platform, `${version}.md`);
   let source;
   try {
     source = fs.readFileSync(summaryPath, 'utf8');
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      throw new Error(`缺少 ${path.relative(root, summaryPath)}，请先编写本版本的中文更新摘要`);
+      throw new Error(`缺少 ${path.relative(root, summaryPath)}，请先编写本平台版本的中文更新摘要`);
     }
     throw error;
   }
@@ -40,29 +51,38 @@ function readChineseSummary(root, version) {
   return summary;
 }
 
-function buildReleaseNotes({ root = DEFAULT_ROOT } = {}) {
-  const version = readVersion(root);
-  const summary = readChineseSummary(root, version);
-  const fpkAsset = `flux-reader-${version}.fpk`;
-  const dmgAsset = `Flux-Reader-${version}-unnotarized-universal.dmg`;
-  const windowsAsset = `flux-reader-${version}-windows-x64.exe`;
+function downloadDescription(platform, asset) {
+  if (platform === 'fnos') return `- \`${asset}\`：fnOS 安装包。`;
+  if (platform === 'windows') return `- \`${asset}\`：Windows x64 安装程序。`;
+  return `- \`${asset}\`：macOS 通用安装镜像（Intel 与 Apple Silicon，未公证）。`;
+}
 
-  return [
-    RELEASE_MARKER,
+function buildReleaseNotes({ root = DEFAULT_ROOT, platform } = {}) {
+  assertPlatform(platform);
+  const version = readVersionSource(root, platform).version;
+  const summary = readChineseSummary(root, platform, version);
+  const metadata = releaseMetadata(platform, version);
+  const notes = [
+    releaseMarker(platform),
+    '',
+    `# Flux Reader ${PLATFORM_LABELS[platform]} ${version}`,
     '',
     summary,
     '',
     '## 下载说明',
     '',
-    `- \`${fpkAsset}\`：fnOS 安装包。`,
-    `- \`${dmgAsset}\`：macOS 通用安装镜像（Intel 与 Apple Silicon）。`,
-    `- \`${windowsAsset}\`：Windows x64 安装程序。`,
+    downloadDescription(platform, metadata.asset),
     '- `SHA256SUMS`：安装包完整性校验文件。',
     '',
-    '> [!WARNING]',
-    '> macOS DMG 仅使用 ad-hoc 签名，未使用 Apple Developer ID 签名，也未经过 Apple 公证。首次打开时 Gatekeeper 可能显示警告或阻止启动，仅建议用于自用、测试或受控环境。',
-    '',
-  ].join('\n');
+  ];
+  if (platform === 'macos') {
+    notes.push(
+      '> [!WARNING]',
+      '> 此 DMG 仅使用 ad-hoc 签名，未使用 Apple Developer ID 签名，也未经过 Apple 公证。首次打开时 Gatekeeper 可能显示警告或阻止启动，仅建议用于自用、测试或受控环境。',
+      '',
+    );
+  }
+  return notes.join('\n');
 }
 
 function writeReleaseNotes(outputPath, options) {
@@ -73,19 +93,43 @@ function writeReleaseNotes(outputPath, options) {
   return absoluteOutput;
 }
 
+function parseArguments(argv) {
+  let platform = null;
+  let mode = null;
+  let outputPath = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === '--platform') {
+      platform = argv[index + 1];
+      index += 1;
+    } else if (argument === '--check') {
+      mode = 'check';
+    } else if (argument === '--output') {
+      mode = 'output';
+      outputPath = argv[index + 1];
+      index += 1;
+    } else {
+      throw new Error(`未知参数：${argument}`);
+    }
+  }
+  assertPlatform(platform);
+  if (!mode || (mode === 'output' && !outputPath)) {
+    throw new Error(
+      '用法：prepare-release-notes.js --platform <fnos|macos|windows> --check | --output <path>'
+    );
+  }
+  return { platform, mode, outputPath };
+}
+
 function main() {
-  const args = process.argv.slice(2);
-  if (args.length === 1 && args[0] === '--check') {
-    buildReleaseNotes();
-    console.log('✓ 中文 Release 更新摘要已校验');
+  const args = parseArguments(process.argv.slice(2));
+  if (args.mode === 'check') {
+    buildReleaseNotes({ platform: args.platform });
+    console.log(`✓ ${PLATFORM_LABELS[args.platform]} 中文 Release 更新摘要已校验`);
     return;
   }
-  if (args.length === 2 && args[0] === '--output') {
-    const outputPath = writeReleaseNotes(args[1]);
-    console.log(`✓ 中文 Release 说明已生成：${outputPath}`);
-    return;
-  }
-  throw new Error('用法：prepare-release-notes.js --check | --output <path>');
+  const outputPath = writeReleaseNotes(args.outputPath, { platform: args.platform });
+  console.log(`✓ 中文 Release 说明已生成：${outputPath}`);
 }
 
 if (require.main === module) {
@@ -98,7 +142,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  RELEASE_MARKER,
   buildReleaseNotes,
+  releaseMarker,
   writeReleaseNotes,
 };

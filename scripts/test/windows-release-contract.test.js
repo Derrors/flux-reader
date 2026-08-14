@@ -10,18 +10,18 @@ test('publishes Windows only as an NSIS EXE installer', () => {
     fs.readFileSync(path.join(root, 'apps/windows/src-tauri/tauri.conf.json'), 'utf8'),
   );
   const releaseWorkflow = fs.readFileSync(
-    path.join(root, '.github/workflows/release.yml'),
+    path.join(root, '.github/workflows/release-windows.yml'),
     'utf8',
   );
   const windowsWorkflow = fs.readFileSync(
-    path.join(root, '.github/workflows/windows.yml'),
+    path.join(root, '.github/workflows/_quality-windows.yml'),
     'utf8',
   );
 
   assert.deepEqual(tauriConfig.bundle.targets, ['nsis']);
   assert.match(releaseWorkflow, /target\/release\/bundle\/nsis\/\*\.exe/);
   assert.doesNotMatch(releaseWorkflow, /target\/release\/bundle\/msi|\.msi\b/i);
-  assert.match(windowsWorkflow, /target\/release\/bundle\/nsis\/\*\.exe/);
+  assert.match(windowsWorkflow, /cargo (check|test|clippy)/);
   assert.doesNotMatch(windowsWorkflow, /target\/release\/bundle\/msi|\.msi\b/i);
 });
 

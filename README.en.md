@@ -9,15 +9,14 @@
 </p>
 
 <p align="center">
-  A local-first Markdown reader and editor built for fnOS and macOS.
+  A local-first Markdown reader and editor built for fnOS, macOS, and Windows.
   <br>
   Read, edit, search, and safely recover multiple documents in one focused workspace.
 </p>
 
 <p align="center">
-  <a href="https://github.com/Derrors/flux-reader/actions/workflows/fnos.yml"><img src="https://github.com/Derrors/flux-reader/actions/workflows/fnos.yml/badge.svg" alt="fnOS CI"></a>
-  <a href="https://github.com/Derrors/flux-reader/actions/workflows/macos.yml"><img src="https://github.com/Derrors/flux-reader/actions/workflows/macos.yml/badge.svg" alt="macOS CI"></a>
-  <a href="https://github.com/Derrors/flux-reader/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/flux-reader?display_name=tag&sort=semver" alt="Latest Release"></a>
+  <a href="https://github.com/Derrors/flux-reader/actions/workflows/ci.yml"><img src="https://github.com/Derrors/flux-reader/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Derrors/flux-reader/releases"><img src="https://img.shields.io/github/v/release/Derrors/flux-reader?display_name=tag&sort=semver" alt="Releases"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
@@ -32,26 +31,27 @@ a live preview, and protect your work across tabs, restarts, and save conflicts.
 - **Multi-document workflows** — Up to 12 tabs, visible unsaved markers, and automatic session restoration.
 - **Knowledge-folder navigation** — Open multiple workspaces, browse their trees, and search names and contents.
 - **Recovery you can trust** — Draft recovery, external-change detection, safe saves, and retained recovery versions.
-- **A consistent appearance** — Light, dark, and system themes with the same rich renderer on both platforms.
+- **A consistent appearance** — Light, dark, and system themes with the same rich renderer across all three platforms.
 
 ## Platform support
 
-| | fnOS | macOS |
-|---|---|---|
-| App type | Native fnOS package | Native SwiftUI app |
-| Open from | Files, folders, file associations | Files, folders, Finder associations, drag and drop |
-| Workspaces | Up to 8 session workspaces | Up to 8 persistent workspaces |
-| Document tabs | Up to 12 with session restore | Up to 12 with session and draft restore |
-| Editing and saving | Save existing authorized files | Save in place and Save As |
-| File updates | Automatic polling | Automatic FSEvents updates |
-| Access control | fnOS app authorization + current-user ACL | App Sandbox + security-scoped bookmarks |
+| | fnOS | macOS | Windows |
+|---|---|---|---|
+| App type | Native fnOS package | Native SwiftUI app | Tauri 2 + WebView2 |
+| Open from | Files, folders, file associations | Files, folders, Finder associations, drag and drop | Native file and folder pickers |
+| Workspaces | Up to 8 session workspaces | Up to 8 persistent workspaces | Up to 8 session workspaces |
+| Document tabs | Up to 12 with session restore | Up to 12 with session and draft restore | Up to 12 with session and draft restore |
+| Editing and saving | Save existing authorized files | Save in place and Save As | Atomic replacement with explicit recovery sidecars |
+| File updates | Automatic polling | Automatic FSEvents updates | Native ReadDirectoryChangesW events |
+| Access control | fnOS app authorization + current-user ACL | App Sandbox + security-scoped bookmarks | Session-scoped native picker authorization |
 
 Flux Reader supports `.md`, `.markdown`, and `.mdx`. Editable documents must be valid UTF-8 and no larger
 than 10 MiB.
 
 ## Installation
 
-Download the latest build from [GitHub Releases](https://github.com/Derrors/flux-reader/releases/latest).
+Download the latest build for your platform from [GitHub Releases](https://github.com/Derrors/flux-reader/releases).
+Each platform has an independent version, tag, and release cadence.
 
 ### fnOS
 
@@ -72,6 +72,14 @@ Requirements: **fnOS 1.2.0401 or later** and Feiniu App 1.34.0 or later.
 The macOS client requires **macOS 14 or later** and supports both Apple Silicon and Intel Macs.
 Gatekeeper may warn about or block an unnotarized build. Prefer a notarized asset whenever one is available.
 
+### Windows
+
+1. Download `flux-reader-<version>-windows-x64.exe`.
+2. Run the installer. Windows may warn about builds that are not code-signed.
+3. Use the native picker to open a file or folder; access remains scoped to the current app session.
+
+The Windows client requires **Windows 10/11 x64** and the system WebView2 Runtime.
+
 ## Quick start
 
 1. Choose **Open File** for a single document, or **Open Folder** to create a workspace.
@@ -79,17 +87,17 @@ Gatekeeper may warn about or block an unnotarized build. Prefer a notarized asse
 3. Open the find bar, or use a keyboard shortcut to search and replace within the active document.
 4. Open more documents as needed. Tabs show unsaved changes and are restored on the next launch.
 
-| Action | fnOS | macOS |
-|---|---|---|
-| Find | `⌘/Ctrl + F` | `⌘ + F` |
-| Find and replace | `⌘/Ctrl + H` | `⌘ + Option + F` |
-| Save | `⌘/Ctrl + S` | `⌘ + S` |
+| Action | fnOS | macOS | Windows |
+|---|---|---|---|
+| Find | `⌘/Ctrl + F` | `⌘ + F` | `Ctrl + F` |
+| Find and replace | `⌘/Ctrl + H` | `⌘ + Option + F` | `Ctrl + H` |
+| Save | `⌘/Ctrl + S` | `⌘ + S` | `Ctrl + S` |
 
 ## Data and security
 
-Flux Reader reads directly from the Mac files or fnOS folders you select. It does not require uploading
+Flux Reader reads directly from the Mac or Windows files and fnOS folders you select. It does not require uploading
 documents to a third-party service. fnOS checks both the app's authorized scope and the signed-in user's
-permissions; macOS uses App Sandbox and security-scoped bookmarks.
+permissions; macOS uses App Sandbox and security-scoped bookmarks; Windows uses session-scoped native picker grants.
 
 Before saving, Flux Reader verifies the disk version to avoid silently overwriting external changes.
 Unsaved drafts and retained recovery versions protect work across unexpected exits or interrupted writes.

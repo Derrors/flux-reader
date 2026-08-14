@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  affected:
+    name: Detect affected platforms
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      fnos: ${{ steps.projects.outputs.fnos }}
+      macos: ${{ steps.projects.outputs.macos }}
+      windows: ${{ steps.projects.outputs.windows }}
+    steps:
+      - name: Checkout repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Classify changed projects
+        id: projects
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            node scripts/affected-projects.js --all --github-output
+          else
+            base="$PUSH_BASE"
+            if [[ "$EVENT_NAME" == "pull_request" ]]; then
+              base="$PR_BASE"
+            fi
+            if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+              node scripts/affected-projects.js --all --github-output
+            else
+              node scripts/affected-projects.js --base "$base" --head "$GITHUB_SHA" --github-output
+            fi
+          fi
+
+  fnos:
+    name: fnOS
+    needs: affected
+    if: ${{ needs.affected.outputs.fnos == 'true' }}
+    uses: ./.github/workflows/_quality-fnos.yml
+
+  macos:
+    name: macOS
+    needs: affected
+    if: ${{ needs.affected.outputs.macos == 'true' }}
+    uses: ./.github/workflows/_quality-macos.yml
+
+  windows:
+    name: Windows
+    needs: affected
+    if: ${{ needs.affected.outputs.windows == 'true' }}
+    uses: ./.github/workflows/_quality-windows.yml

@@ -1,0 +1,50 @@
+name: macOS Quality
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Test macOS app
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      CI: "true"
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+      NPM_CONFIG_REPLACE_REGISTRY_HOST: always
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/reader-web/package-lock.json
+
+      - name: Install shared reader dependencies
+        run: npm ci --prefix packages/reader-web --no-audit --no-fund
+
+      - name: Validate macOS version and shared reader
+        run: |
+          npm run version:check:macos
+          npm run test:release
+          npm run test:reader
+
+      - name: Test built reader entries in Chromium
+        run: npm run test:render-contract
+
+      - name: Lint and test native macOS app
+        run: |
+          xcodebuild -version
+          npm run lint:macos
+          npm run test:macos
+
+      - name: Run macOS UI automation suite
+        run: npm run test:macos-ui

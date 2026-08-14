@@ -15,9 +15,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Derrors/flux-reader/actions/workflows/fnos.yml"><img src="https://github.com/Derrors/flux-reader/actions/workflows/fnos.yml/badge.svg" alt="fnOS CI"></a>
-  <a href="https://github.com/Derrors/flux-reader/actions/workflows/macos.yml"><img src="https://github.com/Derrors/flux-reader/actions/workflows/macos.yml/badge.svg" alt="macOS CI"></a>
-  <a href="https://github.com/Derrors/flux-reader/releases/latest"><img src="https://img.shields.io/github/v/release/Derrors/flux-reader?display_name=tag&sort=semver" alt="Latest Release"></a>
+  <a href="https://github.com/Derrors/flux-reader/actions/workflows/ci.yml"><img src="https://github.com/Derrors/flux-reader/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Derrors/flux-reader/releases"><img src="https://img.shields.io/github/v/release/Derrors/flux-reader?display_name=tag&sort=semver" alt="Releases"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
@@ -50,7 +49,8 @@ Flux Reader 不只是渲染 Markdown。它可以管理文件夹、搜索文稿�
 
 ## 安装
 
-前往 [GitHub Releases](https://github.com/Derrors/flux-reader/releases/latest) 下载最新版本。
+前往 [GitHub Releases](https://github.com/Derrors/flux-reader/releases) 下载对应平台的最新版本。
+三个平台独立版本、独立 Tag 和独立发布，不必保持相同版本号。
 
 ### fnOS
 
@@ -71,6 +71,14 @@ Flux Reader 不只是渲染 Markdown。它可以管理文件夹、搜索文稿�
 macOS 客户端要求 **macOS 14 或更高版本**，同时支持 Apple Silicon 与 Intel Mac。
 未公证构建可能被 Gatekeeper 警告或阻止；正式公证资产可用时应优先选择正式版本。
 
+### Windows
+
+1. 下载 `flux-reader-<version>-windows-x64.exe`。
+2. 运行安装程序；Windows 可能会对尚未签名的构建显示安全提示。
+3. 使用原生选择器打开文件或文件夹，授权仅保留在当前应用会话中。
+
+Windows 客户端要求 **Windows 10/11 x64**，并依赖系统 WebView2 Runtime。
+
 ## 快速上手
 
 1. 点击「打开文件」立即阅读单份 Markdown，或点击「打开文件夹」建立工作区。
@@ -78,11 +86,11 @@ macOS 客户端要求 **macOS 14 或更高版本**，同时支持 Apple Silicon 
 3. 点击查找按钮，或使用快捷键查找和替换当前文稿。
 4. 继续打开其他文稿；标签页会显示未保存标记，并在下次启动时恢复。
 
-| 操作 | fnOS | macOS |
-|---|---|---|
-| 查找 | `⌘/Ctrl + F` | `⌘ + F` |
-| 查找并替换 | `⌘/Ctrl + H` | `⌘ + Option + F` |
-| 保存 | `⌘/Ctrl + S` | `⌘ + S` |
+| 操作 | fnOS | macOS | Windows |
+|---|---|---|---|
+| 查找 | `⌘/Ctrl + F` | `⌘ + F` | `Ctrl + F` |
+| 查找并替换 | `⌘/Ctrl + H` | `⌘ + Option + F` | `Ctrl + H` |
+| 保存 | `⌘/Ctrl + S` | `⌘ + S` | `Ctrl + S` |
 
 ## 数据与安全
 

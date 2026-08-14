@@ -1,0 +1,63 @@
+name: Windows Quality
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Test Windows app
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+      NPM_CONFIG_REPLACE_REGISTRY_HOST: always
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/reader-web/package-lock.json
+
+      - name: Set up Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup component add clippy rustfmt
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Install shared reader dependencies
+        run: npm ci --prefix packages/reader-web --no-audit --no-fund
+
+      - name: Validate Windows version and shared reader
+        run: |
+          npm run version:check:windows
+          npm run test:release
+          npm run test:reader
+          npm run build:windows-renderer
+
+      - name: Rust format check
+        run: cargo fmt --manifest-path apps/windows/src-tauri/Cargo.toml --check
+
+      - name: Rust check
+        run: cargo check --manifest-path apps/windows/src-tauri/Cargo.toml --locked
+
+      - name: Rust tests
+        run: cargo test --manifest-path apps/windows/src-tauri/Cargo.toml --locked
+
+      - name: Rust clippy
+        run: cargo clippy --manifest-path apps/windows/src-tauri/Cargo.toml --locked -- -D warnings

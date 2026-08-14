@@ -68,7 +68,7 @@ jobs:
 
       - name: Validate sources and tests
         run: |
-          npm run version:check
+          npm run version:check:macos
           npm run test:reader
           npm run lint:macos
           npm run test:macos
@@ -76,7 +76,7 @@ jobs:
 
       - name: Read release metadata
         id: metadata
-        run: node scripts/sync-version.js --check --github-output
+        run: node scripts/sync-version.js --check --platform macos --github-output
 
       - name: Import Developer ID credentials
         env:
@@ -120,7 +120,7 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
           DERIVED_DATA: ${{ runner.temp }}/FluxReaderRelease
           OUTPUT_DIR: ${{ github.workspace }}/dist/release
-          DMG_ASSET: ${{ steps.metadata.outputs.signed_dmg_asset }}
+          DMG_ASSET: ${{ steps.metadata.outputs.signed_asset }}
         run: |
           set -euo pipefail
           npm run pack:macos
@@ -135,8 +135,8 @@ jobs:
         with:
           name: notarized-macos-${{ github.run_id }}
           path: |
-            dist/release/${{ steps.metadata.outputs.signed_dmg_asset }}
-            dist/release/${{ steps.metadata.outputs.signed_dmg_asset }}.sha256
+            dist/release/${{ steps.metadata.outputs.signed_asset }}
+            dist/release/${{ steps.metadata.outputs.signed_asset }}.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -145,7 +145,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.metadata.outputs.tag }}
-          DMG_ASSET: ${{ steps.metadata.outputs.signed_dmg_asset }}
+          DMG_ASSET: ${{ steps.metadata.outputs.signed_asset }}
         run: |
           set -euo pipefail
           if ! git show-ref --verify --quiet "refs/tags/$TAG"; then

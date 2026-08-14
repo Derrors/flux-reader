@@ -5,20 +5,25 @@ const path = require('node:path');
 const { afterEach, test } = require('node:test');
 
 const {
-  RELEASE_MARKER,
   buildReleaseNotes,
+  releaseMarker,
   writeReleaseNotes,
 } = require('../prepare-release-notes');
 
 const temporaryRoots = [];
 
-function fixture({ version = '1.2.3', summary = '## 本次更新\n\n- 新增中文发布说明。' } = {}) {
+function fixture({
+  platform = 'fnos',
+  version = '1.2.3',
+  summary = '## 本次更新\n\n- 新增中文发布说明。',
+} = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flux-reader-notes-test-'));
   temporaryRoots.push(root);
-  fs.mkdirSync(path.join(root, 'docs', 'releases'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'VERSION'), `${version}\n`);
+  fs.mkdirSync(path.join(root, 'versions'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'docs', 'releases', platform), { recursive: true });
+  fs.writeFileSync(path.join(root, 'versions', platform), `${version}\n`);
   if (summary != null) {
-    fs.writeFileSync(path.join(root, 'docs', 'releases', `${version}.md`), summary);
+    fs.writeFileSync(path.join(root, 'docs', 'releases', platform, `${version}.md`), summary);
   }
   return root;
 }
@@ -32,39 +37,53 @@ afterEach(() => {
   }
 });
 
-test('generates Chinese release notes with versioned assets and warning', () => {
-  const root = fixture();
-  const notes = buildReleaseNotes({ root });
+test('generates one platform release with a platform marker and asset', () => {
+  const fnos = buildReleaseNotes({ root: fixture(), platform: 'fnos' });
+  assert.match(fnos, new RegExp(`^${releaseMarker('fnos')}`));
+  assert.match(fnos, /Flux Reader fnOS 1\.2\.3/);
+  assert.match(fnos, /flux-reader-1\.2\.3\.fpk/);
+  assert.doesNotMatch(fnos, /\.dmg|windows-x64/);
 
-  assert.match(notes, new RegExp(`^${RELEASE_MARKER}`));
-  assert.match(notes, /## 本次更新/);
-  assert.match(notes, /flux-reader-1\.2\.3\.fpk/);
-  assert.match(notes, /Flux-Reader-1\.2\.3-unnotarized-universal\.dmg/);
-  assert.match(notes, /flux-reader-1\.2\.3-windows-x64\.exe/);
-  assert.doesNotMatch(notes, /windows-x64\.msi/);
-  assert.match(notes, /未经过 Apple 公证/);
-  assert.doesNotMatch(notes, /Full Changelog|What's Changed/);
+  const windows = buildReleaseNotes({
+    root: fixture({ platform: 'windows' }),
+    platform: 'windows',
+  });
+  assert.match(windows, /flux-reader-1\.2\.3-windows-x64\.exe/);
+  assert.doesNotMatch(windows, /\.fpk|\.dmg/);
+
+  const macos = buildReleaseNotes({
+    root: fixture({ platform: 'macos' }),
+    platform: 'macos',
+  });
+  assert.match(macos, /Flux-Reader-1\.2\.3-unnotarized-universal\.dmg/);
+  assert.match(macos, /未经过 Apple 公证/);
 });
 
-test('writes the validated notes to the requested output path', () => {
-  const root = fixture();
+test('writes validated platform notes to the requested output path', () => {
+  const root = fixture({ platform: 'windows' });
   const outputPath = path.join(root, 'output', 'RELEASE_NOTES.md');
-
-  assert.equal(writeReleaseNotes(outputPath, { root }), outputPath);
-  assert.equal(fs.readFileSync(outputPath, 'utf8'), buildReleaseNotes({ root }));
+  assert.equal(writeReleaseNotes(outputPath, { root, platform: 'windows' }), outputPath);
+  assert.equal(
+    fs.readFileSync(outputPath, 'utf8'),
+    buildReleaseNotes({ root, platform: 'windows' }),
+  );
 });
 
-test('rejects missing, empty, or non-Chinese version summaries', () => {
+test('rejects missing, empty, non-Chinese, or unspecified platform summaries', () => {
   assert.throws(
-    () => buildReleaseNotes({ root: fixture({ summary: null }) }),
-    /缺少 docs\/releases\/1\.2\.3\.md/,
+    () => buildReleaseNotes({ root: fixture({ summary: null }), platform: 'fnos' }),
+    /缺少 docs\/releases\/fnos\/1\.2\.3\.md/,
   );
   assert.throws(
-    () => buildReleaseNotes({ root: fixture({ summary: '   ' }) }),
+    () => buildReleaseNotes({ root: fixture({ summary: '   ' }), platform: 'fnos' }),
     /不能为空/,
   );
   assert.throws(
-    () => buildReleaseNotes({ root: fixture({ summary: '## Changes\n\n- Fix bugs.' }) }),
+    () => buildReleaseNotes({
+      root: fixture({ platform: 'macos', summary: '## Changes\n\n- Fix bugs.' }),
+      platform: 'macos',
+    }),
     /必须包含中文/,
   );
+  assert.throws(() => buildReleaseNotes({ root: fixture() }), /必须通过 --platform/);
 });

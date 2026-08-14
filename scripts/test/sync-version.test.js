@@ -5,24 +5,27 @@ const os = require('node:os');
 const path = require('node:path');
 const { afterEach, test } = require('node:test');
 
-const { releaseMetadata, syncVersion } = require('../sync-version');
+const { readVersionSource, releaseMetadata, syncVersion } = require('../sync-version');
 
 const temporaryRoots = [];
 
 function fixture({
-  version = '1.2.3',
-  manifestVersion = version,
-  xcodeVersion = version,
-  windowsCargoVersion = version,
+  versions = { fnos: '1.2.3', macos: '2.3.4', windows: '3.4.5' },
+  manifestVersion = versions.fnos,
+  xcodeVersion = versions.macos,
+  windowsCargoVersion = versions.windows,
   windowsCargoLockVersion = windowsCargoVersion,
-  tauriVersion = version,
+  tauriVersion = versions.windows,
 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flux-reader-version-test-'));
   temporaryRoots.push(root);
+  fs.mkdirSync(path.join(root, 'versions'), { recursive: true });
   fs.mkdirSync(path.join(root, 'apps', 'fnos', 'package'), { recursive: true });
   fs.mkdirSync(path.join(root, 'apps', 'macos', 'FluxReader.xcodeproj'), { recursive: true });
   fs.mkdirSync(path.join(root, 'apps', 'windows', 'src-tauri'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'VERSION'), `${version}\n`);
+  for (const [platform, version] of Object.entries(versions)) {
+    fs.writeFileSync(path.join(root, 'versions', platform), `${version}\n`);
+  }
   fs.writeFileSync(
     path.join(root, 'apps', 'fnos', 'package', 'manifest'),
     `appname="flux-reader"\nversion="${manifestVersion}"\n`
@@ -63,135 +66,121 @@ afterEach(() => {
   }
 });
 
-test('accepts a synchronized three-part release version', () => {
+test('validates independent platform versions', () => {
   const root = fixture();
-  assert.equal(syncVersion({ root }), '1.2.3');
+  assert.deepEqual(syncVersion({ root }), {
+    fnos: '1.2.3',
+    macos: '2.3.4',
+    windows: '3.4.5',
+  });
+  assert.equal(syncVersion({ root, platform: 'macos' }), '2.3.4');
 });
 
-test('keeps release tag and asset names in one versioned contract', () => {
-  assert.deepEqual(releaseMetadata('1.2.3'), {
+test('uses platform-prefixed immutable tags and one platform asset', () => {
+  assert.deepEqual(releaseMetadata('fnos', '1.2.3'), {
+    platform: 'fnos',
     version: '1.2.3',
-    tag: 'v1.2.3',
-    fpkAsset: 'flux-reader-1.2.3.fpk',
-    dmgAsset: 'Flux-Reader-1.2.3-unnotarized-universal.dmg',
-    signedDmgAsset: 'Flux-Reader-1.2.3-universal.dmg',
-    windowsAsset: 'flux-reader-1.2.3-windows-x64.exe',
+    tag: 'fnos/v1.2.3',
+    asset: 'flux-reader-1.2.3.fpk',
+  });
+  assert.deepEqual(releaseMetadata('macos', '2.3.4'), {
+    platform: 'macos',
+    version: '2.3.4',
+    tag: 'macos/v2.3.4',
+    asset: 'Flux-Reader-2.3.4-unnotarized-universal.dmg',
+    signedAsset: 'Flux-Reader-2.3.4-universal.dmg',
+  });
+  assert.deepEqual(releaseMetadata('windows', '3.4.5'), {
+    platform: 'windows',
+    version: '3.4.5',
+    tag: 'windows/v3.4.5',
+    asset: 'flux-reader-3.4.5-windows-x64.exe',
   });
 });
 
-test('writes the same release contract to GitHub Actions outputs', () => {
+test('writes one selected platform contract to GitHub Actions outputs', () => {
   const outputRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'flux-reader-version-test-'));
   temporaryRoots.push(outputRoot);
   const outputPath = path.join(outputRoot, 'github-output');
   const scriptPath = path.resolve(__dirname, '..', 'sync-version.js');
-  const version = syncVersion();
+  const version = readVersionSource(path.resolve(__dirname, '..', '..'), 'windows').version;
 
-  execFileSync(process.execPath, [scriptPath, '--check', '--github-output'], {
-    env: { ...process.env, GITHUB_OUTPUT: outputPath },
-    stdio: 'pipe',
-  });
-
-  const outputs = Object.fromEntries(
-    fs.readFileSync(outputPath, 'utf8')
-      .trim()
-      .split('\n')
-      .map((line) => line.split('=', 2))
+  execFileSync(
+    process.execPath,
+    [scriptPath, '--check', '--platform', 'windows', '--github-output'],
+    { env: { ...process.env, GITHUB_OUTPUT: outputPath }, stdio: 'pipe' },
   );
-  const metadata = releaseMetadata(version);
-  assert.deepEqual(outputs, {
-    version: metadata.version,
-    tag: metadata.tag,
-    fpk_asset: metadata.fpkAsset,
-    dmg_asset: metadata.dmgAsset,
-    signed_dmg_asset: metadata.signedDmgAsset,
-    windows_asset: metadata.windowsAsset,
-  });
+
+  assert.deepEqual(
+    Object.fromEntries(
+      fs.readFileSync(outputPath, 'utf8').trim().split('\n').map((line) => line.split('=', 2)),
+    ),
+    {
+      platform: 'windows',
+      version,
+      tag: `windows/v${version}`,
+      asset: `flux-reader-${version}-windows-x64.exe`,
+      signed_asset: '',
+    },
+  );
 });
 
-test('rejects drift without modifying source files', () => {
+test('rejects drift only for selected platforms', () => {
+  const root = fixture({ manifestVersion: '1.2.2', windowsCargoVersion: '3.4.4' });
+  assert.equal(syncVersion({ root, platform: 'macos' }), '2.3.4');
+  assert.throws(() => syncVersion({ root, platform: 'fnos' }), /fnos=1\.2\.2/);
+  assert.throws(() => syncVersion({ root, platform: 'windows' }), /windows=3\.4\.4/);
+});
+
+test('writes only selected distribution versions and remains idempotent', () => {
   const root = fixture({
-    manifestVersion: '1.2.2',
-    xcodeVersion: '1.2.1',
-    windowsCargoVersion: '1.1.9',
-    windowsCargoLockVersion: '1.1.8',
-    tauriVersion: '1.0.0',
+    manifestVersion: '1.0.0',
+    xcodeVersion: '2.0.0',
+    windowsCargoVersion: '3.0.0',
+    windowsCargoLockVersion: '3.0.0',
+    tauriVersion: '3.0.0',
   });
-  assert.throws(() => syncVersion({ root }), /发布版本未同步/);
+
+  assert.equal(syncVersion({ root, platform: 'fnos', write: true }), '1.2.3');
   assert.match(
-    fs.readFileSync(path.join(root, 'apps', 'fnos', 'package', 'manifest'), 'utf8'),
-    /version="1\.2\.2"/
+    fs.readFileSync(path.join(root, 'apps/fnos/package/manifest'), 'utf8'),
+    /version="1\.2\.3"/,
   );
-});
+  assert.throws(() => syncVersion({ root, platform: 'macos' }), /macos=2\.0\.0/);
+  assert.throws(() => syncVersion({ root, platform: 'windows' }), /windows=3\.0\.0/);
 
-test('rejects Cargo.lock drift before Windows CI runs with --locked', () => {
-  const root = fixture({ windowsCargoLockVersion: '1.2.2' });
-  assert.throws(
-    () => syncVersion({ root }),
-    /Windows Cargo\.lock=1\.2\.2/
-  );
-});
-
-test('writes every distribution version and is idempotent', () => {
-  const root = fixture({
-    version: '2.0.1',
-    manifestVersion: '1.9.9',
-    xcodeVersion: '1.0.0',
-    windowsCargoVersion: '1.8.0',
-    tauriVersion: '1.7.0',
+  assert.deepEqual(syncVersion({ root, write: true }), {
+    fnos: '1.2.3',
+    macos: '2.3.4',
+    windows: '3.4.5',
   });
-  assert.equal(syncVersion({ root, write: true }), '2.0.1');
-
-  const manifestPath = path.join(root, 'apps', 'fnos', 'package', 'manifest');
-  const projectPath = path.join(root, 'apps', 'macos', 'FluxReader.xcodeproj', 'project.pbxproj');
-  const cargoPath = path.join(root, 'apps', 'windows', 'src-tauri', 'Cargo.toml');
-  const cargoLockPath = path.join(root, 'apps', 'windows', 'src-tauri', 'Cargo.lock');
-  const tauriPath = path.join(root, 'apps', 'windows', 'src-tauri', 'tauri.conf.json');
-  const firstManifest = fs.readFileSync(manifestPath, 'utf8');
-  const firstProject = fs.readFileSync(projectPath, 'utf8');
-  const firstCargo = fs.readFileSync(cargoPath, 'utf8');
-  const firstCargoLock = fs.readFileSync(cargoLockPath, 'utf8');
-  const firstTauriConfig = fs.readFileSync(tauriPath, 'utf8');
-  assert.match(firstManifest, /version="2\.0\.1"/);
-  assert.equal((firstProject.match(/MARKETING_VERSION = 2\.0\.1;/g) || []).length, 2);
-  assert.match(firstCargo, /^version = "2\.0\.1"$/m);
-  assert.match(firstCargoLock, /name = "flux-reader-windows"\nversion = "2\.0\.1"/);
-  assert.equal(JSON.parse(firstTauriConfig).version, '2.0.1');
-
-  assert.equal(syncVersion({ root, write: true }), '2.0.1');
-  assert.equal(fs.readFileSync(manifestPath, 'utf8'), firstManifest);
-  assert.equal(fs.readFileSync(projectPath, 'utf8'), firstProject);
-  assert.equal(fs.readFileSync(cargoPath, 'utf8'), firstCargo);
-  assert.equal(fs.readFileSync(cargoLockPath, 'utf8'), firstCargoLock);
-  assert.equal(fs.readFileSync(tauriPath, 'utf8'), firstTauriConfig);
+  assert.deepEqual(syncVersion({ root, write: true }), {
+    fnos: '1.2.3',
+    macos: '2.3.4',
+    windows: '3.4.5',
+  });
 });
 
-test('rejects invalid versions and ambiguous version fields', () => {
-  const invalidRoot = fixture({ version: '1.2' });
-  assert.throws(() => syncVersion({ root: invalidRoot }), /单行三段纯数字版本号/);
-
-  const multilineRoot = fixture();
-  fs.writeFileSync(path.join(multilineRoot, 'VERSION'), '1.2.3\n1.2.4\n');
-  assert.throws(() => syncVersion({ root: multilineRoot }), /单行三段纯数字版本号/);
+test('rejects invalid version files, ambiguous fields, and unknown platforms', () => {
+  const invalidRoot = fixture();
+  fs.writeFileSync(path.join(invalidRoot, 'versions/fnos'), '1.2\n');
+  assert.throws(
+    () => syncVersion({ root: invalidRoot, platform: 'fnos' }),
+    /单行三段纯数字版本号/,
+  );
 
   const duplicateRoot = fixture();
-  const manifestPath = path.join(duplicateRoot, 'apps', 'fnos', 'package', 'manifest');
-  fs.appendFileSync(manifestPath, 'version="9.9.9"\n');
+  fs.appendFileSync(path.join(duplicateRoot, 'apps/fnos/package/manifest'), 'version="9.9.9"\n');
   assert.throws(() => syncVersion({ root: duplicateRoot }), /只能包含一个 version 字段/);
 
-  const duplicateCargoLockRoot = fixture();
-  const cargoLockPath = path.join(
-    duplicateCargoLockRoot,
-    'apps',
-    'windows',
-    'src-tauri',
-    'Cargo.lock'
-  );
+  const duplicateCargoRoot = fixture();
   fs.appendFileSync(
-    cargoLockPath,
-    '\n[[package]]\nname = "flux-reader-windows"\nversion = "9.9.9"\n'
+    path.join(duplicateCargoRoot, 'apps/windows/src-tauri/Cargo.lock'),
+    '\n[[package]]\nname = "flux-reader-windows"\nversion = "9.9.9"\n',
   );
   assert.throws(
-    () => syncVersion({ root: duplicateCargoLockRoot }),
-    /Cargo\.lock 必须且只能包含一个 flux-reader-windows 包/
+    () => syncVersion({ root: duplicateCargoRoot, platform: 'windows' }),
+    /Cargo\.lock 必须且只能包含一个 flux-reader-windows 包/,
   );
+  assert.throws(() => syncVersion({ root: fixture(), platform: 'linux' }), /未知平台/);
 });

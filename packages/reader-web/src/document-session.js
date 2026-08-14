@@ -13,6 +13,12 @@ function availableStorage(storage) {
     return null;
   }
 }
+
+function tabLimit(value) {
+  return Number.isSafeInteger(value) && value >= 1 && value <= 64
+    ? value
+    : MAX_DOCUMENT_TABS;
+}
 export function documentSessionStorageKey(uid) {
   if ((typeof uid !== 'string' && typeof uid !== 'number') || !String(uid).trim()) {
     return null;
@@ -45,7 +51,7 @@ function normalizeTab(value) {
   };
 }
 
-export function readDocumentSession(uid, storage) {
+export function readDocumentSession(uid, storage, maximumTabs = MAX_DOCUMENT_TABS) {
   const key = documentSessionStorageKey(uid);
   const target = availableStorage(storage);
   if (!key || !target) return { tabs: [], activeId: null };
@@ -60,7 +66,7 @@ export function readDocumentSession(uid, storage) {
         seen.add(tab.id);
         return true;
       })
-      .slice(0, MAX_DOCUMENT_TABS);
+      .slice(0, tabLimit(maximumTabs));
     const activeId = tabs.some((tab) => tab.id === parsed.activeId)
       ? parsed.activeId
       : tabs[0]?.id || null;
@@ -70,7 +76,13 @@ export function readDocumentSession(uid, storage) {
   }
 }
 
-export function writeDocumentSession(uid, tabs, activeId, storage) {
+export function writeDocumentSession(
+  uid,
+  tabs,
+  activeId,
+  storage,
+  maximumTabs = MAX_DOCUMENT_TABS,
+) {
   const key = documentSessionStorageKey(uid);
   const target = availableStorage(storage);
   if (!key || !target) return false;
@@ -89,7 +101,7 @@ export function writeDocumentSession(uid, tabs, activeId, storage) {
       seen.add(tab.id);
       return true;
     })
-    .slice(0, MAX_DOCUMENT_TABS);
+    .slice(0, tabLimit(maximumTabs));
   const safeActiveId = safeTabs.some((tab) => tab.id === activeId)
     ? activeId
     : safeTabs[0]?.id || null;

@@ -56,7 +56,14 @@ final class LocalFileServiceTests: XCTestCase {
   func testProductionLimitsSupportTenMiBDocumentsAndRecovery() {
     let tenMiB = 10 * 1_024 * 1_024
 
+    XCTAssertEqual(ProductPolicy.maximumEditableDocumentBytes, tenMiB)
+    XCTAssertEqual(ProductPolicy.maximumLocalImageBytes, 25 * 1_024 * 1_024)
+    XCTAssertEqual(ProductPolicy.maximumWorkspaceCount, 8)
+    XCTAssertEqual(ProductPolicy.maximumDocumentTabs, 12)
+    XCTAssertEqual(ProductPolicy.maximumRecentDocuments, 12)
     XCTAssertEqual(LocalFileService.defaultMaximumFileSize, tenMiB)
+    XCTAssertEqual(DocumentResourceLoader.maximumFileSize, ProductPolicy.maximumLocalImageBytes)
+    XCTAssertEqual(DocumentSessionRecord.maximumTabCount, ProductPolicy.maximumDocumentTabs)
     XCTAssertGreaterThan(LocalDraftRecoveryStore.maximumRecordSize, tenMiB)
     XCTAssertGreaterThanOrEqual(
       LocalDocumentSessionStore.maximumRecordSize,

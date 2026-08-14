@@ -1,0 +1,171 @@
+name: Release fnOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-fnos
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Validate fnOS release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      asset: ${{ steps.version.outputs.asset }}
+      complete: ${{ steps.release.outputs.complete }}
+    steps:
+      - name: Reject non-main runs
+        if: ${{ github.ref != 'refs/heads/main' }}
+        run: exit 1
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Validate version and release notes
+        id: version
+        run: |
+          node scripts/sync-version.js --check --platform fnos --github-output
+          node scripts/prepare-release-notes.js --platform fnos --check
+      - name: Inspect immutable release state
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          ASSET: ${{ steps.version.outputs.asset }}
+        run: |
+          set -euo pipefail
+          complete=false
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            tag_sha="$(git rev-list -n 1 "refs/tags/$TAG")"
+            if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "$TAG 已用于其他提交，请提升 fnOS 版本号。" >&2
+              exit 1
+            fi
+            release_json="$(gh release view "$TAG" --json isDraft,assets)"
+            if [[ "$(jq -r '.isDraft' <<<"$release_json")" != "false" ]]; then
+              echo "$TAG 存在未完成草稿，请人工处理后重试。" >&2
+              exit 1
+            fi
+            for file in "$ASSET" SHA256SUMS; do
+              jq -e --arg name "$file" '.assets[] | select(.name == $name)' <<<"$release_json" >/dev/null
+            done
+            complete=true
+          elif gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG 的 Release 与本地 tag 状态不一致，拒绝继续。" >&2
+            exit 1
+          fi
+          echo "complete=$complete" >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: fnOS quality gate
+    needs: metadata
+    if: ${{ needs.metadata.outputs.complete != 'true' }}
+    uses: ./.github/workflows/_quality-fnos.yml
+
+  build:
+    name: Build fnOS FPK
+    needs: [metadata, quality]
+    if: ${{ needs.metadata.outputs.complete != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+      NPM_CONFIG_REPLACE_REGISTRY_HOST: always
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            apps/fnos/backend/package-lock.json
+            packages/reader-web/package-lock.json
+      - name: Install dependencies
+        run: |
+          npm ci --prefix apps/fnos/backend --no-audit --no-fund
+          npm ci --prefix packages/reader-web --no-audit --no-fund
+      - name: Install verified fnpack 1.2.3
+        env:
+          FNPACK_URL: https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          FNPACK_SHA256: 54b97fa7b70968c4d05c79840f5daeff508957d0bb2062fdb0376d00d9615c93
+        run: |
+          curl --fail --location --silent --show-error "$FNPACK_URL" --output "$RUNNER_TEMP/fnpack"
+          echo "$FNPACK_SHA256  $RUNNER_TEMP/fnpack" | sha256sum --check --strict
+          chmod 0755 "$RUNNER_TEMP/fnpack"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Build and normalize FPK
+        env:
+          ASSET: ${{ needs.metadata.outputs.asset }}
+        run: |
+          set -euo pipefail
+          npm run pack:fnos
+          mapfile -t packages < <(find apps/fnos/package -maxdepth 1 -type f -name '*.fpk' -print)
+          [[ "${#packages[@]}" -eq 1 ]]
+          mkdir -p dist/release
+          mv -- "${packages[0]}" "dist/release/$ASSET"
+          test -s "dist/release/$ASSET"
+      - name: Upload release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-fnos-${{ github.run_id }}
+          path: dist/release/${{ needs.metadata.outputs.asset }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    name: Publish fnOS Release
+    needs: [metadata, build]
+    if: ${{ needs.metadata.outputs.complete != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-fnos-${{ github.run_id }}
+          path: dist/release
+      - name: Publish immutable platform release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          ASSET: ${{ needs.metadata.outputs.asset }}
+          NOTES: ${{ runner.temp }}/release-notes.md
+        run: |
+          set -euo pipefail
+          node scripts/prepare-release-notes.js --platform fnos --output "$NOTES"
+          cd dist/release
+          sha256sum "$ASSET" > SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+          cd ../..
+          git fetch --force --tags origin
+          if git show-ref --verify --quiet "refs/tags/$TAG" || gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG 在构建期间出现，拒绝覆盖。" >&2
+            exit 1
+          fi
+          gh release create "$TAG" "dist/release/$ASSET" dist/release/SHA256SUMS \
+            --target "$GITHUB_SHA" --title "Flux Reader fnOS $VERSION" --notes-file "$NOTES"

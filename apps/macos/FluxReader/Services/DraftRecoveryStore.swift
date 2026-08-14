@@ -305,7 +305,7 @@ struct DocumentSessionTabRecord: Codable, Equatable, Sendable, Identifiable {
 
 struct DocumentSessionRecord: Codable, Equatable, Sendable {
   static let currentFormatVersion = 1
-  static let maximumTabCount = 12
+  static let maximumTabCount = ProductPolicy.maximumDocumentTabs
 
   let formatVersion: Int
   let tabs: [DocumentSessionTabRecord]

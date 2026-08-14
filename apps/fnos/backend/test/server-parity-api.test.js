@@ -50,6 +50,21 @@ async function invoke(url, { afterStart } = {}) {
   };
 }
 
+test('env exposes the versioned fnOS capability and product policy contract', async () => {
+  const response = await invoke('/api/env');
+  assert.equal(response.status, 200);
+  const environment = JSON.parse(response.body.toString('utf8'));
+  assert.equal(environment.platform, 'fnos');
+  assert.equal(environment.capabilitySchemaVersion, 1);
+  assert.equal(environment.capabilities.safeSave, true);
+  assert.equal(environment.capabilities.sessionScopedAuthorization, false);
+  assert.equal(environment.capabilities.fileWatching, false);
+  assert.equal(environment.policy.maxEditableDocumentBytes, fileAccess.MAX_FILE_BYTES);
+  assert.equal(environment.policy.maxLocalImageBytes, fileAccess.MAX_IMAGE_BYTES);
+  assert.equal(environment.policy.maxWorkspaces, 8);
+  assert.equal(environment.policy.maxDocumentTabs, 12);
+});
+
 test('list API exposes the canonical directory path with its entries', async (t) => {
   const original = fileAccess.listDirectory;
   let received;

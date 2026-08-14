@@ -100,6 +100,31 @@ api.get('/env', (req, res) => {
     openApiAvailable: trimApi.isAvailable(),
     uid: getUserId(req),
     mode: SOCKET_PATH ? 'socket' : 'port',
+    platform: 'fnos',
+    capabilitySchemaVersion: 1,
+    capabilities: {
+      nativeDialog: true,
+      sessionScopedAuthorization: false,
+      requestCancellation: true,
+      workspaceSearch: true,
+      safeSave: true,
+      recovery: true,
+      localResources: true,
+      fileWatching: false,
+      safeSaveSemantics: {
+        writeVisibility: 'inPlaceWithReadBarrier',
+        recoveryLocation: 'applicationPrivateStorage',
+      },
+      recoveryPolicy: {
+        cleanupMode: 'automaticAfterCommit',
+      },
+    },
+    policy: {
+      maxEditableDocumentBytes: fileAccess.MAX_FILE_BYTES,
+      maxLocalImageBytes: fileAccess.MAX_IMAGE_BYTES,
+      maxWorkspaces: 8,
+      maxDocumentTabs: 12,
+    },
   });
 });
 
