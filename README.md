@@ -99,7 +99,7 @@ Flux Reader 直接读取你在 Mac/Windows 选择的文件或 fnOS 授权目录�
 
 - [技术架构、本地开发、测试与发布](docs/TECHNICAL.md)
 - [fnOS 平台说明](apps/fnos/README.md)
-- [Windows 平台说明（Tauri 开发中）](apps/windows/README.md)
+- [Windows 平台说明](apps/windows/README.md)
 - [macOS 平台说明](apps/macos/README.md)
 - [共享 Web 阅读器说明](packages/reader-web/README.md)
 

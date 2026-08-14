@@ -102,6 +102,7 @@ recovery transactions, and performance limits. This guide is currently available
 - [Technical architecture, development, testing, and releases](docs/TECHNICAL.md) — Chinese
 - [fnOS platform notes](apps/fnos/README.md) — Chinese
 - [macOS platform notes](apps/macos/README.md) — Chinese
+- [Windows platform notes](apps/windows/README.md) — Chinese
 - [Shared Web reader notes](packages/reader-web/README.md) — Chinese
 
 ## Contributing
